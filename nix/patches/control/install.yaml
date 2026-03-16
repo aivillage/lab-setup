@@ -1,0 +1,8 @@
+machine:
+  install:
+    disk: null
+    wipe: true
+    diskSelector:
+      size: 512110190592
+cluster:
+  allowSchedulingOnControlPlanes: true
