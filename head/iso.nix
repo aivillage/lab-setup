@@ -31,6 +31,4 @@
     git # To clone this repo if needed
     neovim
   ];
-
-  environment.etc."nixos/configuration.nix".source = ./configuration.nix;
 }

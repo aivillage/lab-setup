@@ -9,7 +9,16 @@
   inputs,
 }:
 let
-  mkMachineType = import ../machine.nix { inherit lib; };
+  machineModule = import ../machine.nix { inherit lib; };
+  mkMachineType =
+    args:
+    (lib.evalModules {
+      modules = [
+        machineModule
+        { config = args; }
+      ];
+    }).config;
+
   configLib = import ./config.nix { inherit pkgs lib inputs; };
 
   baseExtensions = [
@@ -42,16 +51,33 @@ let
 
   mkMachine =
     {
-      machine,
-      version,
+      machine ? null,
+      version ? "v1.9.0",
       arch ? "amd64",
-      sha256,
-    }:
+      sha256 ? lib.fakeSha256,
+      ...
+    }@args:
+    let
+      # Use machine if provided, or extract it if machine is a machine object,
+      # otherwise create it from the remaining arguments.
+      m =
+        if machine == null then
+          mkMachineType (builtins.removeAttrs args [
+            "machine"
+            "version"
+            "arch"
+            "sha256"
+          ])
+        else if machine ? machine then
+          machine.machine
+        else
+          machine;
+    in
     {
-      inherit machine;
+      machine = m;
       image = mkImage {
+        machine = m;
         inherit
-          machine
           version
           arch
           sha256
@@ -59,13 +85,16 @@ let
       };
 
       dhcpHosts = lib.concatLists (
-        lib.mapAttrsToList (_dev: iface: [
-          "${iface.mac},${iface.ip},${machine.name}"
-        ]) machine.network-interfaces
+        lib.mapAttrsToList (
+          _dev: iface: [
+            "${iface.mac},${iface.ip},${m.name}"
+          ]
+        ) m.network-interfaces
       );
 
-      primaryIp = builtins.head (lib.mapAttrsToList (_: iface: iface.ip) machine.network-interfaces);
+      primaryIp = builtins.head (lib.mapAttrsToList (_: iface: iface.ip) m.network-interfaces);
     };
+
 
 in
 {

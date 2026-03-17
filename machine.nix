@@ -19,7 +19,7 @@ let
     };
   };
 in
-types.submodule {
+{
   options = {
     name = mkOption {
       type = types.str;
@@ -64,3 +64,4 @@ types.submodule {
     };
   };
 }
+

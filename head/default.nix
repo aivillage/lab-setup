@@ -17,10 +17,21 @@
 # Everything else (ZFS, users, SSH, tailscale, packages) belongs in
 # the lab repo's own configuration.nix.
 # =====================================================================
-{ config, lib, pkgs, inputs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  inputs,
+  ...
+}:
 let
-  inherit (lib) types mkOption mkEnableOption mkIf
-                concatMap;
+  inherit (lib)
+    types
+    mkOption
+    mkEnableOption
+    mkIf
+    concatMap
+    ;
 
   cfg = config.lab-setup.pxe;
 
@@ -32,6 +43,7 @@ let
       ./inspector.nix
     ];
   };
+  machineType = types.submodule (import ../machine.nix { inherit lib; });
 in
 {
   options.lab-setup.pxe = {
@@ -49,7 +61,8 @@ in
     };
 
     machines = mkOption {
-      type = types.listOf pxeMachineType;
+      type = types.listOf machineType;
+
       description = "Talos machines to PXE boot, each with image and boot mode";
     };
 
@@ -68,13 +81,13 @@ in
 
     extraDhcpHosts = mkOption {
       type = types.listOf types.str;
-      default = [];
+      default = [ ];
       description = "Additional static dhcp-host entries beyond the machine inventory";
     };
 
     extraAddresses = mkOption {
       type = types.listOf types.str;
-      default = [];
+      default = [ ];
       description = "Extra dnsmasq address= entries";
     };
   };
@@ -117,7 +130,7 @@ in
         ];
 
         # Static hosts — derived from machine inventory
-        dhcp-host = (concatMap mkDhcpHosts cfg.machines) ++ cfg.extraDhcpHosts;
+        dhcp-host = (concatMap cfg.machines) ++ cfg.extraDhcpHosts;
         address = [ "/nas/${cfg.ip}" ] ++ cfg.extraAddresses;
 
         # TFTP / PXE chainloading
@@ -141,17 +154,23 @@ in
     # ── Firewall: open DHCP + DNS + TFTP ────────────────────────
     networking.firewall = {
       allowedTCPPorts = [ 53 ];
-      allowedUDPPorts = [ 53 67 69 ];
+      allowedUDPPorts = [
+        53
+        67
+        69
+      ];
     };
 
     # ── TFTP directory tree ─────────────────────────────────────
-    systemd.tmpfiles.rules = import ./pxe-boot.nix {
-      inherit pkgs;
-      ip = cfg.ip;
-      machines = cfg.machines;
-      inspector = inspector;
-    } ++ [
-      "z ${cfg.mount-point} 0777 nobody nogroup -"
-    ];
+    systemd.tmpfiles.rules =
+      import ./pxe-boot.nix {
+        inherit pkgs;
+        ip = cfg.ip;
+        machines = cfg.machines;
+        inspector = inspector;
+      }
+      ++ [
+        "z ${cfg.mount-point} 0777 nobody nogroup -"
+      ];
   };
 }

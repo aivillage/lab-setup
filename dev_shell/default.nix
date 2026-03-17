@@ -15,53 +15,6 @@ let
   isDarwin = pkgs.stdenv.isDarwin;
   isLinux = pkgs.stdenv.isLinux;
 
-  mkContainerScripts = import ./container_scripts.nix {
-    inherit pkgs;
-  };
-
-  talosConfigs = import ./talos-config.nix {
-    inherit pkgs inputs;
-    lib = pkgs.lib;
-    clusterName = "aivProd";
-    talosVersion = "v1.12.1";
-    vIp = "10.211.0.20";
-    nfsServer = "10.211.0.10";
-    mainPath = "/mnt/data/dynamic-pvc";
-    vllmPath = "/mnt/data/model-store";
-  };
-
-  myContainerScripts = mkContainerScripts [
-    # Standard Dockerfile builds (type="docker" is default)
-    {
-      name = "yolo-l2-notebook";
-      path = "workshops/yolo-l2/notebook";
-    }
-    {
-      name = "yolo-l2-verification";
-      path = "workshops/yolo-l2/verification";
-    }
-    {
-      name = "email-indirect-service";
-      path = "workshops/email-indirect/service";
-    }
-    {
-      name = "email-indirect-user";
-      path = "workshops/email-indirect/user";
-    }
-
-    # Nix builds - core components
-    {
-      name = "workshop-sidecar";
-      path = "workshop-sidecar";
-      type = "nix";
-    }
-    {
-      name = "workshop-hub";
-      path = "workshop-hub";
-      type = "nix";
-    }
-  ];
-
   cliTools =
     with pkgs;
     [
@@ -78,11 +31,8 @@ let
       sops
       ssh-to-age
     ]
-    ++ myContainerScripts
     ++ [
       rustToolchain
-      talosConfigs
-      talosPxe
     ];
 in
 {

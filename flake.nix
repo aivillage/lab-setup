@@ -125,7 +125,7 @@
             let
               talos = import ./talos/default.nix { inherit pkgs lib inputs; };
 
-              fixtureMachine = talos.mkMachineType {
+              fixtureMachine = talos.mkMachine {
                 name = "test-node";
                 controlPlane = true;
                 network-interfaces = {
