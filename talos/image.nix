@@ -4,33 +4,14 @@
 {
   version,
   sha256,
+  schematic,
   diskImage ? "iso", # Options: iso, raw, qcow2, pxe, pxe-assets
   platform ? "metal",
   arch ? "amd64",
   secureboot ? false,
-  systemExtensions ? [ ],
-  extraKernelArgs ? [ ],
-  meta ? [ ],
 }:
 
 let
-  # 1. Define the Configuration
-  schematicConfig = {
-    customization = {
-      systemExtensions = {
-        officialExtensions = systemExtensions;
-      };
-      extraKernelArgs = extraKernelArgs;
-      meta = meta;
-    }
-    // pkgs.lib.optionalAttrs secureboot {
-      secureboot = {
-        includeWellKnownCertificates = true;
-      };
-    };
-  };
-
-  schematicJson = builtins.toJSON schematicConfig;
   secbootSuffix = if secureboot then "-secureboot" else "";
 
   # 2. Configure file extensions and domains based on image type
@@ -89,31 +70,11 @@ pkgs.stdenvNoCC.mkDerivation {
 
   nativeBuildInputs = [
     pkgs.curl
-    pkgs.jq
   ];
 
   buildCommand = ''
     export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-    export PATH="${pkgs.curl}/bin:${pkgs.jq}/bin:$PATH"
-
-    echo "--> Registering Talos Schematic..."
-    echo "    Config: ${schematicJson}"
-
-    # --- STEP 1: POST to get the ID ---
-    RESPONSE=$(curl -s -X POST \
-      -H "Content-Type: application/json" \
-      --data-binary '${schematicJson}' \
-      https://factory.talos.dev/schematics)
-
-    ID=$(echo "$RESPONSE" | jq -r '.id')
-
-    if [ -z "$ID" ] || [ "$ID" == "null" ]; then
-      echo "Error: Failed to retrieve Schematic ID. Factory response:"
-      echo "$RESPONSE"
-      exit 1
-    fi
-
-    echo "--> Success! Got Schematic ID: $ID"
+    export PATH="${pkgs.curl}/bin:$PATH"
 
     # --- STEP 2: Download the Assets ---
 
@@ -123,8 +84,8 @@ pkgs.stdenvNoCC.mkDerivation {
         mkdir -p $out
 
         # Construct URLs for Kernel and Initramfs
-        KERNEL_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/$ID/${version}/kernel-${arch}"
-        INITRD_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/$ID/${version}/initramfs-${arch}.xz"
+        KERNEL_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${schematic.id}/${version}/kernel-${arch}"
+        INITRD_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${schematic.id}/${version}/initramfs-${arch}.xz"
 
         echo "    Fetching Kernel: $KERNEL_URL"
         curl -L --fail --show-error --progress-bar -o $out/vmlinuz "$KERNEL_URL"
@@ -134,7 +95,7 @@ pkgs.stdenvNoCC.mkDerivation {
 
     else
         # === SINGLE FILE MODE (iso, raw, pxe-script) ===
-        URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/$ID/${version}/${fileName}"
+        URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${schematic.id}/${version}/${fileName}"
         echo "--> Downloading single image from: $URL"
         curl -L --fail --show-error --progress-bar -o $out "$URL"
     fi

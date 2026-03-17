@@ -21,6 +21,12 @@ let
 in
 {
   options = {
+    version = mkOption {
+      type = types.str;
+      default = "v1.12.1";
+    };
+    sha256 = mkOption { type = types.str; };
+    schematicSha256 = mkOption { type = types.str; };
     name = mkOption {
       type = types.str;
       description = "Hostname of this machine";
@@ -64,4 +70,3 @@ in
     };
   };
 }
-

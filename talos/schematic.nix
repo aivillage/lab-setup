@@ -1,58 +1,84 @@
-# Posts the schematic config to factory.talos.dev and outputs
-# the resulting schematic ID as a plain text file.
-# Both image.nix and config.nix consume this derivation.
+# lab-setup/talos/schematic.nix
 #
-{ pkgs }:
-{
-  systemExtensions ? [ ],
-  extraKernelArgs ? [ ],
-  meta ? [ ],
-  secureboot ? false,
-}:
+# Registers a Talos Factory schematic for a given machine and returns
+# a derivation whose $out is the schematic ID string.
+#
+# Called from default.nix via mkSchematic { machine, version, sha256 }.
+#
+{ pkgs, lib }:
 
 let
-  schematicConfig = {
-    customization = {
-      systemExtensions = {
-        officialExtensions = systemExtensions;
-      };
-      extraKernelArgs = extraKernelArgs;
-      meta = meta;
-    }
-    // pkgs.lib.optionalAttrs secureboot {
-      secureboot = {
-        includeWellKnownCertificates = true;
-      };
-    };
-  };
+  baseExtensions = [
+    "siderolabs/amd-ucode"
+    "siderolabs/intel-ucode"
+  ];
 
-  schematicJson = builtins.toJSON schematicConfig;
+  nvidiaExtensions = [
+    "siderolabs/nvidia-container-toolkit-lts"
+    "siderolabs/nvidia-open-gpu-kernel-modules-lts"
+  ];
+
 in
-pkgs.stdenvNoCC.mkDerivation {
-  name = "talos-schematic-id";
-  outputHashAlgo = "sha256";
-  outputHashMode = "flat";
-  # Caller must supply the real hash after a first run with fakeSha256
-  outputHash = ""; # placeholder — see usage in default.nix
+{
+  mkSchematic =
+    {
+      machine,
+      sha256 ? lib.fakeSha256,
+      extraKernelArgs ? [ ],
+      meta ? [ ],
+      secureboot ? false,
+    }:
+    let
+      extensions =
+        baseExtensions ++ lib.optionals machine.nvidia nvidiaExtensions ++ machine.extraExtensions;
 
-  nativeBuildInputs = [ pkgs.curl pkgs.jq ];
+      schematicConfig = {
+        customization = {
+          systemExtensions.officialExtensions = extensions;
+          extraKernelArgs = extraKernelArgs;
+          meta = meta;
+        };
+      }
+      // lib.optionalAttrs secureboot {
+        secureboot.includeWellKnownCertificates = true;
+      };
 
-  buildCommand = ''
-    export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+      schematicJson = builtins.toJSON schematicConfig;
 
-    RESPONSE=$(curl -s -X POST \
-      -H "Content-Type: application/json" \
-      --data-binary '${schematicJson}' \
-      https://factory.talos.dev/schematics)
+    in
+    pkgs.stdenvNoCC.mkDerivation {
+      name = "talos-schematic-${machine.name}";
+      outputHashAlgo = "sha256";
+      outputHashMode = "flat";
+      outputHash = sha256;
 
-    ID=$(echo "$RESPONSE" | jq -r '.id')
+      nativeBuildInputs = [
+        pkgs.curl
+        pkgs.jq
+      ];
 
-    if [ -z "$ID" ] || [ "$ID" == "null" ]; then
-      echo "Error: Failed to retrieve Schematic ID."
-      echo "$RESPONSE"
-      exit 1
-    fi
+      buildCommand = ''
+        export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+        export PATH="${pkgs.curl}/bin:${pkgs.jq}/bin:$PATH"
 
-    echo -n "$ID" > $out
-  '';
+        echo "--> Registering Talos Schematic for ${machine.name}..."
+        echo "    Config: ${schematicJson}"
+
+        RESPONSE=$(curl -s -X POST \
+          -H "Content-Type: application/json" \
+          --data-binary '${schematicJson}' \
+          https://factory.talos.dev/schematics)
+
+        ID=$(echo "$RESPONSE" | jq -r '.id')
+
+        if [ -z "$ID" ] || [ "$ID" == "null" ]; then
+          echo "Error: Failed to retrieve Schematic ID. Factory response:"
+          echo "$RESPONSE"
+          exit 1
+        fi
+
+        echo "--> Success! Got Schematic ID: $ID"
+        echo -n "$ID" > $out
+      '';
+    };
 }

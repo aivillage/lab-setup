@@ -107,11 +107,12 @@
             inspector-bin = mkInspectorBin { inherit pkgs system; };
           }
           // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-            nas-installer-iso = (nixpkgs.lib.nixosSystem {
-              inherit system;
-              specialArgs = { inherit inputs; };
-              modules = [ ./head/iso.nix ];
-            }).config.system.build.images.iso-installer;
+            nas-installer-iso =
+              (nixpkgs.lib.nixosSystem {
+                inherit system;
+                specialArgs = { inherit inputs; };
+                modules = [ ./head/iso.nix ];
+              }).config.system.build.images.iso-installer;
           };
 
           checks =
@@ -120,8 +121,11 @@
 
               # A minimal fixture machine — used to test structural correctness
               # without needing real hardware config.
-              fixtureMachine = talos.mkMachine {
+              testMachine = talos.machine {
                 name = "test-node";
+                version = "v1.12.1";
+                sha256 = "sha256-Hj2L6bcDnTItd2XlP4UzEQ1W89F5QxkjY0TNL74wmfw=";
+                schematicSha256 = pkgs.lib.fakeSha256;
                 controlPlane = true;
                 network-interfaces = {
                   enp1s0 = {
@@ -139,12 +143,6 @@
                 nvidia = false;
                 extraExtensions = [ ];
                 extraPatches = [ ];
-              };
-
-              testMachine = talos.mkMachine {
-                machine = fixtureMachine.machine; # unwrap: fixtureMachine is already a mkMachine result
-                version = "v1.9.0";
-                sha256 = "sha256-Hj2L6bcDnTItd2XlP4UzEQ1W89F5QxkjY0TNL74wmfw=";
               };
 
               generatePatches = talos.mkGeneratePatches {
@@ -206,7 +204,7 @@
                   echo "FAIL: derivation name does not have a name"
                   exit 1
                 fi
-                
+
 
                 echo "OK: image derivation structure looks correct"
                 echo "$name" > $out
