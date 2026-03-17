@@ -52,7 +52,7 @@ let
   mkMachine =
     {
       machine ? null,
-      version ? "v1.9.0",
+      version ? "v1.12.1",
       arch ? "amd64",
       sha256 ? lib.fakeSha256,
       ...
@@ -74,6 +74,7 @@ let
           machine;
     in
     {
+      name = m.name;
       machine = m;
       image = mkImage {
         machine = m;

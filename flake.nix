@@ -201,6 +201,12 @@
                   echo "FAIL: derivation name does not include platform/arch"
                   exit 1
                 fi
+                name="${testMachine.name}"
+                if [[ "$name" != *"test-node"* ]]; then
+                  echo "FAIL: derivation name does not have a name"
+                  exit 1
+                fi
+                
 
                 echo "OK: image derivation structure looks correct"
                 echo "$name" > $out
