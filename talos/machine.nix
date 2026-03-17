@@ -9,6 +9,15 @@ let
       mac = mkOption { type = types.str; };
     };
   };
+
+  diskSelectorType = types.submodule {
+    options = {
+      size = mkOption {
+        type = types.int;
+        description = "Exact disk size in bytes used by Talos diskSelector";
+      };
+    };
+  };
 in
 types.submodule {
   options = {
@@ -35,9 +44,9 @@ types.submodule {
     };
 
     diskSelector = mkOption {
-      type = types.attrsOf types.anything;
-      default = { size = ">=500GB"; };
-      description = "Talos diskSelector for install target";
+      type = diskSelectorType;
+      description = "Talos diskSelector for the install target";
+      example = { size = 512110190592; };
     };
 
     extraExtensions = mkOption {

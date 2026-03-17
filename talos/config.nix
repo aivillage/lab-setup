@@ -39,7 +39,7 @@ let
     pkgs.writeShellScriptBin "generate-patches" ''
       set -euo pipefail
 
-      OUTPUT_DIR="''${1:-.}/patches"
+      OUTPUT_DIR="''${1:-.talos/patches}"
       mkdir -p "$OUTPUT_DIR"
 
       echo "Generating shared patches → $OUTPUT_DIR"
@@ -51,13 +51,15 @@ let
       cp -f ${mainPvcFile}                 "$OUTPUT_DIR/nfs.yaml"
       cp -f ${modelPvcFile}                "$OUTPUT_DIR/model-store.yaml"
       cp -f ${./patches/control.yaml}      "$OUTPUT_DIR/control.yaml"
-      cp -f ${./patches/control/install.yaml}  "$OUTPUT_DIR/control-install.yaml"
-      cp -f ${./patches/worker/install.yaml}   "$OUTPUT_DIR/worker-install.yaml"
 
       echo "✅ Patches written to $OUTPUT_DIR"
     '';
 
-  # ── Per-machine patch: hostname + network + disk selector ─────
+  # ── Per-machine patch: hostname + network + install ───────────
+  #
+  # Generates machine.install from machine.diskSelector.
+  # Currently only diskSelector.size is supported.
+  #
   mkMachinePatch = machine:
     let
       networkYaml = lib.concatMapStringsSep "\n" (dev:
@@ -68,10 +70,6 @@ let
               - ${iface.ip}/24
         ''
       ) (lib.attrNames machine.network-interfaces);
-
-      diskSelectorYaml = lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (k: v: "        ${k}: ${toString v}") machine.diskSelector
-      );
     in
     pkgs.writeText "${machine.name}-machine-patch.yaml" ''
       machine:
@@ -83,13 +81,12 @@ let
           disk: null
           wipe: true
           diskSelector:
-      ${diskSelectorYaml}
+            size: ${toString machine.diskSelector.size}
     '';
 
   # ── 2) Generate a single machine's config ─────────────────────
   #
-  # Takes a patches dir (from mkGeneratePatches) at runtime.
-  # Layers: shared patches → role patches → nvidia (if applicable)
+  # Layers: shared patches → control patch (if CP) → nvidia (if applicable)
   #         → machine patch → extraPatches
   #
   mkMachineConfig = {
@@ -113,16 +110,11 @@ let
         "control.yaml"
       ];
 
-      # Role-specific
-      rolePatch =
-        if machine.controlPlane
-        then "control-install.yaml"
-        else "worker-install.yaml";
-
       sharedFlags = lib.concatMapStringsSep " \\\n    "
         (f: "--config-patch @\"$PATCHES_DIR/${f}\"") sharedPatches;
 
-      roleFlag = "--config-patch @\"$PATCHES_DIR/${rolePatch}\"";
+      controlFlag = lib.optionalString machine.controlPlane
+        "--config-patch @\"$PATCHES_DIR/control.yaml\"";
 
       nvidiaFlag = lib.optionalString machine.nvidia
         "--config-patch @\"$PATCHES_DIR/nvidia-kernel.yaml\"";
@@ -156,7 +148,6 @@ let
         --output-types "${outputType}" \
         --output "${machine.name}.yaml" \
         ${sharedFlags} \
-        ${roleFlag} \
         ${nvidiaFlag} \
         --config-patch @${machinePatch} \
         ${extraFlags} \
