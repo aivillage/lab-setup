@@ -100,6 +100,43 @@
           let lib = pkgs.lib; in {
             talos = import ./talos/default.nix { inherit pkgs lib inputs; };
           };
+        
+checks = ({ pkgs, system, inputs }: 
+  let
+    lib = pkgs.lib;
+    talos = import ./talos/default.nix { inherit pkgs lib inputs; };
+
+    fixtureMachine = talos.mkMachineType {
+      name = "test-node";
+      controlPlane = true;
+      network-interfaces = {
+        enp1s0 = { ip = "10.0.0.1"; mac = "aa:bb:cc:dd:ee:ff"; };
+      };
+      diskSelector = { size = 512110190592; };
+      nvidia = false;
+      extraExtensions = [];
+      extraPatches = [];
+    };
+
+    testMachine = talos.mkMachine {
+      machine = fixtureMachine;
+      version = "v1.9.0";
+      sha256 = lib.fakeSha256; # or a real one
+    };
+
+    generatePatches = talos.mkGeneratePatches {
+      nfsServer = "10.0.0.10";
+      mainPath  = "/data";
+      vllmPath  = "/models";
+    };
+  in {
+    # This forces Nix to actually build the derivations
+    talos-generate-patches = generatePatches;
+    talos-machine-image    = testMachine.image;
+    talos-dhcp-hosts       = pkgs.writeText "dhcp-hosts" 
+                               (lib.concatStringsSep "\n" testMachine.dhcpHosts);
+  }
+);
       };
     };
 }
