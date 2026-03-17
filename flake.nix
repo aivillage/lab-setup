@@ -10,11 +10,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nixos-generators = {
-      url = "github:nix-community/nixos-generators";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     # For the development environment
     process-compose-flake = {
       url = "github:Platonic-Systems/process-compose-flake";
@@ -29,7 +24,6 @@
       self,
       nixpkgs,
       fenix,
-      nixos-generators,
       flake-parts,
       ...
     }:
@@ -113,18 +107,19 @@
             inspector-bin = mkInspectorBin { inherit pkgs system; };
           }
           // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-            nas-installer-iso = nixos-generators.nixosGenerate {
+            nas-installer-iso = (nixpkgs.lib.nixosSystem {
               inherit system;
-              format = "install-iso";
               specialArgs = { inherit inputs; };
               modules = [ ./head/iso.nix ];
-            };
+            }).config.system.build.images.iso-installer;
           };
 
           checks =
             let
               talos = import ./talos/default.nix { inherit pkgs lib inputs; };
 
+              # A minimal fixture machine — used to test structural correctness
+              # without needing real hardware config.
               fixtureMachine = talos.mkMachine {
                 name = "test-node";
                 controlPlane = true;
@@ -132,6 +127,10 @@
                   enp1s0 = {
                     ip = "10.0.0.1";
                     mac = "aa:bb:cc:dd:ee:ff";
+                  };
+                  enp2s0 = {
+                    ip = "10.0.0.2";
+                    mac = "11:22:33:44:55:66";
                   };
                 };
                 diskSelector = {
@@ -143,9 +142,9 @@
               };
 
               testMachine = talos.mkMachine {
-                machine = fixtureMachine;
+                machine = fixtureMachine.machine; # unwrap: fixtureMachine is already a mkMachine result
                 version = "v1.9.0";
-                sha256 = lib.fakeSha256; # or a real one
+                sha256 = "sha256-Hj2L6bcDnTItd2XlP4UzEQ1W89F5QxkjY0TNL74wmfw=";
               };
 
               generatePatches = talos.mkGeneratePatches {
@@ -153,12 +152,69 @@
                 mainPath = "/data";
                 vllmPath = "/models";
               };
+
+              # Build the DHCP hosts text and assert expected format.
+              # Each entry must be: "<mac>,<ip>,<hostname>"
+              dhcpHostsText = lib.concatStringsSep "\n" testMachine.dhcpHosts;
+
+              dhcpHostsCheck = pkgs.runCommand "check-dhcp-hosts" { } ''
+                set -euo pipefail
+                echo "--- DHCP hosts ---"
+                printf '%s\n' ${lib.escapeShellArg dhcpHostsText}
+
+                # Every non-empty line must match MAC,IP,name
+                while IFS= read -r line; do
+                  [[ -z "$line" ]] && continue
+                  if [[ ! "$line" =~ ^([0-9a-fA-F:]{17}),([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+),(.+)$ ]]; then
+                    echo "FAIL: malformed dhcp-host entry: $line"
+                    exit 1
+                  fi
+                done <<< ${lib.escapeShellArg dhcpHostsText}
+
+                # We expect exactly one entry per network interface (2 in the fixture)
+                count=$(printf '%s\n' ${lib.escapeShellArg dhcpHostsText} | grep -c '.' || true)
+                if [[ "$count" -ne 2 ]]; then
+                  echo "FAIL: expected 2 dhcp-host entries, got $count"
+                  exit 1
+                fi
+
+                cp ${pkgs.writeText "dhcp-hosts" dhcpHostsText} $out
+                echo "OK: $count dhcp-host entries validated"
+              '';
+
+              # Validate the image derivation has the expected output structure
+              # for pxe-assets mode (directory with vmlinuz + initrd).
+              # This check is structural — it verifies the Nix derivation attrs
+              # are correct without fetching (the hash will fail if actually built
+              # with fakeSha256; swap in a real hash to make it fetchable).
+              imageStructureCheck = pkgs.runCommand "check-image-structure" { } ''
+                set -euo pipefail
+
+                # Confirm the image derivation name contains expected version/platform
+                name="${testMachine.image.name}"
+                echo "Image derivation name: $name"
+                if [[ "$name" != *"v1.9.0"* ]]; then
+                  echo "FAIL: derivation name does not include version"
+                  exit 1
+                fi
+                if [[ "$name" != *"metal-amd64"* ]]; then
+                  echo "FAIL: derivation name does not include platform/arch"
+                  exit 1
+                fi
+
+                echo "OK: image derivation structure looks correct"
+                echo "$name" > $out
+              '';
+
             in
             {
-              # This forces Nix to actually build the derivations
               talos-generate-patches = generatePatches;
+
+              talos-dhcp-hosts = dhcpHostsCheck;
+
+              talos-image-structure = imageStructureCheck;
+
               talos-machine-image = testMachine.image;
-              talos-dhcp-hosts = pkgs.writeText "dhcp-hosts" (lib.concatStringsSep "\n" testMachine.dhcpHosts);
             };
         };
 
