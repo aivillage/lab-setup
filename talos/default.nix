@@ -9,7 +9,7 @@
   inputs,
 }:
 let
-  mkMachineType = import ./machine.nix { inherit lib; };
+  mkMachineType = import ../machine.nix { inherit lib; };
   configLib = import ./config.nix { inherit pkgs lib inputs; };
 
   baseExtensions = [
