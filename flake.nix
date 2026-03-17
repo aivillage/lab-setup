@@ -47,16 +47,6 @@
         process-compose-flake.flakeModule
       ];
 
-      # Inspector for the booted computers
-      flake.nixosConfigurations.inspector = inputs.nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        specialArgs = { inherit inputs; };
-        modules = [
-          (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
-          ./nix/nas/inspector.nix
-        ];
-      };
-
       perSystem = { config, self', pkgs, system, lib, ... }:
         let
           hostSystemName = if (builtins.getEnv "DEV_HOSTNAME") != "" then (builtins.getEnv "DEV_HOSTNAME") else "localhost";
