@@ -152,7 +152,6 @@ let
       ${pkgs.talosctl}/bin/talosctl gen config \
         "${clusterName}" \
         "${clusterEndpoint}" \
-        --install-disk "" \
         --talos-version "${talosVersion}" \
         --output-types "${outputType}" \
         --output "${machine.name}.yaml" \

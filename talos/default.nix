@@ -31,6 +31,8 @@ let
     "siderolabs/nvidia-open-gpu-kernel-modules-lts"
   ];
 
+  mkSchematic = import ./schematic.nix { inherit pkgs; };
+
   mkImage =
     {
       machine,
@@ -54,7 +56,8 @@ let
       machine ? null,
       version ? "v1.12.1",
       arch ? "amd64",
-      sha256 ? lib.fakeSha256,
+      sha256,
+      schematicSha256,
       ...
     }@args:
     let
@@ -72,6 +75,11 @@ let
           machine.machine
         else
           machine;
+      schematic = mkSchematic {
+        systemExtensions = extensions;
+        outputHash = schematicSha256;
+      };
+      installerImage = "factory.talos.dev/installer/${builtins.readFile schematic}:${version}";
     in
     {
       name = m.name;
@@ -83,6 +91,10 @@ let
           arch
           sha256
           ;
+      };
+      schematic = mkSchematic {
+        systemExtensions = extensions;
+        outputHash = schematicSha256;
       };
 
       dhcpHosts = lib.concatLists (
