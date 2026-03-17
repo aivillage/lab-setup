@@ -57,16 +57,6 @@
         ];
       };
 
-      # Nas
-      flake.nixosConfigurations.nas = inputs.nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        specialArgs = { inherit inputs; };
-        modules = [
-          ./nix/nas/configuration.nix
-        ];
-        
-      };
-
       perSystem = { config, self', pkgs, system, lib, ... }:
         let
           hostSystemName = if (builtins.getEnv "DEV_HOSTNAME") != "" then (builtins.getEnv "DEV_HOSTNAME") else "localhost";
@@ -96,47 +86,6 @@
           ];
 
           binaries = {
-            sidecar-bin = rustPlatform.buildRustPackage {
-              pname = "workshop-sidecar";
-              version = "0.1.0";
-              src = ./.;
-              cargoLock.lockFile = ./Cargo.lock;
-
-              buildInputs = commonBuildInputs;
-              nativeBuildInputs = commonNativeBuildInputs;
-              buildAndTestSubdir = "crates/sidecar";
-              env = {
-                LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
-              };
-              cargoBuildFlags = [ "-p" "sidecar" ];
-              doCheck = false;
-              
-
-              meta = with lib; {
-                mainProgram = "sidecar";
-              };
-            };
-
-            hub-bin = rustPlatform.buildRustPackage {
-              pname = "workshop-hub";
-              version = "0.1.0";
-              src = ./.;
-              cargoLock.lockFile = ./Cargo.lock;
-
-              buildInputs = commonBuildInputs;
-              nativeBuildInputs = commonNativeBuildInputs;
-              buildAndTestSubdir = "crates/hub";
-              env = {
-                LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
-              };
-              cargoBuildFlags = [ "-p" "hub" ];
-              doCheck = false;
-
-              meta = with lib; {
-                mainProgram = "hub";
-              };
-            };
-
             inspector-bin = rustPlatform.buildRustPackage {
               pname = "inspector";
               version = "0.1.0";
@@ -165,27 +114,6 @@
                 mainProgram = "inspector";
               };
             };
-
-            integration-tests-bin = rustPlatform.buildRustPackage {
-              pname = "integration-tests";
-              version = "0.1.0";
-              src = ./.;
-              cargoLock.lockFile = ./Cargo.lock;
-
-              buildInputs = commonBuildInputs;
-              nativeBuildInputs = commonNativeBuildInputs;
-              buildAndTestSubdir = "crates/integration-tests";
-              
-              cargoBuildFlags = [ "-p" "integration-tests" ];
-              doCheck = false;
-              env = {
-                LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
-              };
-
-              meta = with lib; {
-                mainProgram = "integration-tests";
-              };
-            };
           };
 
         in
@@ -200,33 +128,6 @@
               modules = [
                 ./nix/nas/iso.nix
               ];
-            };
-            # Docker Images
-            workshop-sidecar = pkgs.dockerTools.buildImage {
-              name = "workshop-sidecar";
-              tag = "latest";
-
-              config = {
-                Cmd = [ "${binaries.sidecar-bin}/bin/sidecar" ];
-              };
-            };
-            
-            workshop-hub = pkgs.dockerTools.buildImage {
-              name = "workshop-hub";
-              tag = "latest";
-              
-              config = {
-                Cmd = [ "${binaries.hub-bin}/bin/hub" ];
-              };
-            };
-
-            workshop-integration-tests = pkgs.dockerTools.buildImage {
-              name = "workshop-integration-tests";
-              tag = "latest";
-              
-              config = {
-                Cmd = [ "${binaries.integration-tests-bin}/bin/integration-tests" ];
-              };
             };
           };
         };
