@@ -46,18 +46,20 @@ types.submodule {
     diskSelector = mkOption {
       type = diskSelectorType;
       description = "Talos diskSelector for the install target";
-      example = { size = 512110190592; };
+      example = {
+        size = 512110190592;
+      };
     };
 
     extraExtensions = mkOption {
       type = types.listOf types.str;
-      default = [];
+      default = [ ];
       description = "Additional Talos system extensions beyond defaults";
     };
 
     extraPatches = mkOption {
       type = types.listOf types.path;
-      default = [];
+      default = [ ];
       description = "Additional Talos config patch files for this machine";
     };
   };

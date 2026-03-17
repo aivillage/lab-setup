@@ -1,4 +1,12 @@
-{ pkgs, lib, inputs, nfsServer, mainPath, vllmPath, ... }:
+{
+  pkgs,
+  lib,
+  inputs,
+  nfsServer,
+  mainPath,
+  vllmPath,
+  ...
+}:
 let
   kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
 
@@ -23,7 +31,8 @@ let
     inherit pkgs kubelib;
   };
 
-in {
+in
+{
   all = [
     ciliumFile
     ghcrAuthFile

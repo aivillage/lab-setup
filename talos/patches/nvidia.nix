@@ -53,20 +53,20 @@ let
     values = devicePluginValues;
   };
 
-  helmPatch = pkgs.runCommand "nvidia-plugin.yaml" {} ''
-    set -euo pipefail
-    
-    (
-      cat << 'PATCH_START'
-cluster:
-  inlineManifests:
-    - name: nvidia-device-plugin
-      contents: |
-PATCH_START
-    
-      sed 's/^/        /' "${renderedNvidiaManifests}"
-      
-    ) > "$out"
+  helmPatch = pkgs.runCommand "nvidia-plugin.yaml" { } ''
+        set -euo pipefail
+        
+        (
+          cat << 'PATCH_START'
+    cluster:
+      inlineManifests:
+        - name: nvidia-device-plugin
+          contents: |
+    PATCH_START
+        
+          sed 's/^/        /' "${renderedNvidiaManifests}"
+          
+        ) > "$out"
   '';
 
 in

@@ -18,27 +18,41 @@
     # For the development environment
     process-compose-flake = {
       url = "github:Platonic-Systems/process-compose-flake";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
     services-flake = {
       url = "github:juspay/services-flake";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = inputs@{ self, nixpkgs, fenix, nixos-generators, flake-parts, ... }:
+  outputs =
+    inputs@{
+      self,
+      nixpkgs,
+      fenix,
+      nixos-generators,
+      flake-parts,
+      ...
+    }:
     let
       # Systems the inspector binary can be built for
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
 
-      forEachSystem = systems: f:
-        nixpkgs.lib.genAttrs systems (system: f {
-          pkgs = nixpkgs.legacyPackages.${system};
-          inherit system;
-        });
+      forEachSystem =
+        systems: f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f {
+            pkgs = nixpkgs.legacyPackages.${system};
+            inherit system;
+          }
+        );
 
       # ── inspector-bin ────────────────────────────────────────
-      mkInspectorBin = { pkgs, system }:
+      mkInspectorBin =
+        { pkgs, system }:
         let
           rustToolchain = fenix.packages.${system}.stable.minimalToolchain;
           rustPlatform = pkgs.makeRustPlatform {
@@ -52,18 +66,27 @@
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           buildInputs = [ pkgs.openssl ];
-          nativeBuildInputs = [ pkgs.pkg-config pkgs.openssl pkgs.cmake ];
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.openssl
+            pkgs.cmake
+          ];
           buildAndTestSubdir = "crates/inspector";
           env.LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
-          cargoBuildFlags = [ "-p" "inspector" ];
+          cargoBuildFlags = [
+            "-p"
+            "inspector"
+          ];
           doCheck = false;
           postInstall = ''
             wrapProgram $out/bin/inspector \
-              --prefix PATH : ${pkgs.lib.makeBinPath [
-                pkgs.util-linux
-                pkgs.gptfdisk
-                pkgs.coreutils
-              ]}
+              --prefix PATH : ${
+                pkgs.lib.makeBinPath [
+                  pkgs.util-linux
+                  pkgs.gptfdisk
+                  pkgs.coreutils
+                ]
+              }
           '';
           meta.mainProgram = "inspector";
         };
@@ -76,67 +99,78 @@
         inputs.process-compose-flake.flakeModule
       ];
 
-      perSystem = { pkgs, system, ... }:
+      perSystem =
+        { pkgs, system, ... }:
         let
+          lib = pkgs.lib;
           dev_shell = import ./dev_shell { inherit inputs pkgs system; };
-        in {
+        in
+        {
           process-compose."default" = dev_shell.environment;
           devShells.default = dev_shell.shell;
 
           packages = {
             inspector-bin = mkInspectorBin { inherit pkgs system; };
-          } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          }
+          // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
             nas-installer-iso = nixos-generators.nixosGenerate {
               inherit system;
               format = "install-iso";
               specialArgs = { inherit inputs; };
-              modules = [ ./nix/nas/iso.nix ];
+              modules = [ ./head/iso.nix ];
             };
           };
+
+          checks =
+            let
+              talos = import ./talos/default.nix { inherit pkgs lib inputs; };
+
+              fixtureMachine = talos.mkMachineType {
+                name = "test-node";
+                controlPlane = true;
+                network-interfaces = {
+                  enp1s0 = {
+                    ip = "10.0.0.1";
+                    mac = "aa:bb:cc:dd:ee:ff";
+                  };
+                };
+                diskSelector = {
+                  size = 512110190592;
+                };
+                nvidia = false;
+                extraExtensions = [ ];
+                extraPatches = [ ];
+              };
+
+              testMachine = talos.mkMachine {
+                machine = fixtureMachine;
+                version = "v1.9.0";
+                sha256 = lib.fakeSha256; # or a real one
+              };
+
+              generatePatches = talos.mkGeneratePatches {
+                nfsServer = "10.0.0.10";
+                mainPath = "/data";
+                vllmPath = "/models";
+              };
+            in
+            {
+              # This forces Nix to actually build the derivations
+              talos-generate-patches = generatePatches;
+              talos-machine-image = testMachine.image;
+              talos-dhcp-hosts = pkgs.writeText "dhcp-hosts" (lib.concatStringsSep "\n" testMachine.dhcpHosts);
+            };
         };
 
       flake = {
-        lib = { pkgs }:
-          let lib = pkgs.lib; in {
+        lib =
+          { pkgs }:
+          let
+            lib = pkgs.lib;
+          in
+          {
             talos = import ./talos/default.nix { inherit pkgs lib inputs; };
           };
-        
-checks = ({ pkgs, system, inputs }: 
-  let
-    lib = pkgs.lib;
-    talos = import ./talos/default.nix { inherit pkgs lib inputs; };
-
-    fixtureMachine = talos.mkMachineType {
-      name = "test-node";
-      controlPlane = true;
-      network-interfaces = {
-        enp1s0 = { ip = "10.0.0.1"; mac = "aa:bb:cc:dd:ee:ff"; };
-      };
-      diskSelector = { size = 512110190592; };
-      nvidia = false;
-      extraExtensions = [];
-      extraPatches = [];
-    };
-
-    testMachine = talos.mkMachine {
-      machine = fixtureMachine;
-      version = "v1.9.0";
-      sha256 = lib.fakeSha256; # or a real one
-    };
-
-    generatePatches = talos.mkGeneratePatches {
-      nfsServer = "10.0.0.10";
-      mainPath  = "/data";
-      vllmPath  = "/models";
-    };
-  in {
-    # This forces Nix to actually build the derivations
-    talos-generate-patches = generatePatches;
-    talos-machine-image    = testMachine.image;
-    talos-dhcp-hosts       = pkgs.writeText "dhcp-hosts" 
-                               (lib.concatStringsSep "\n" testMachine.dhcpHosts);
-  }
-);
       };
     };
 }

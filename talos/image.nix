@@ -1,14 +1,16 @@
-{ pkgs ? import <nixpkgs> {} }:
 {
-  version,   
-  sha256,    
+  pkgs ? import <nixpkgs> { },
+}:
+{
+  version,
+  sha256,
   diskImage ? "iso", # Options: iso, raw, qcow2, pxe, pxe-assets
   platform ? "metal",
   arch ? "amd64",
-  secureboot ? false, 
-  systemExtensions ? [],
-  extraKernelArgs ? [],
-  meta ? []
+  secureboot ? false,
+  systemExtensions ? [ ],
+  extraKernelArgs ? [ ],
+  meta ? [ ],
 }:
 
 let
@@ -20,8 +22,11 @@ let
       };
       extraKernelArgs = extraKernelArgs;
       meta = meta;
-    } // pkgs.lib.optionalAttrs secureboot {
-      secureboot = { includeWellKnownCertificates = true; };
+    }
+    // pkgs.lib.optionalAttrs secureboot {
+      secureboot = {
+        includeWellKnownCertificates = true;
+      };
     };
   };
 
@@ -29,34 +34,46 @@ let
   secbootSuffix = if secureboot then "-secureboot" else "";
 
   # 2. Configure file extensions and domains based on image type
-  imageConfig = if diskImage == "iso" then {
-    isDirectory = false;
-    ext = ".iso";
-    domain = "factory.talos.dev";
-    pathPrefix = "image";
-  } else if diskImage == "raw" then {
-    isDirectory = false;
-    ext = ".raw.zst";
-    domain = "factory.talos.dev";
-    pathPrefix = "image";
-  } else if diskImage == "qcow2" then {
-    isDirectory = false;
-    ext = ".qcow2";
-    domain = "factory.talos.dev";
-    pathPrefix = "image";
-  } else if diskImage == "pxe" then {
-    # This downloads the iPXE script text file provided by Factory
-    isDirectory = false;
-    ext = "";
-    domain = "pxe.factory.talos.dev";
-    pathPrefix = "pxe";
-  } else if diskImage == "pxe-assets" then {
-    # NEW: Downloads kernel + initramfs into a folder
-    isDirectory = true;
-    ext = ""; # No single extension
-    domain = "factory.talos.dev"; 
-    pathPrefix = "image";
-  } else abort "Unknown diskImage type: ${diskImage}.";
+  imageConfig =
+    if diskImage == "iso" then
+      {
+        isDirectory = false;
+        ext = ".iso";
+        domain = "factory.talos.dev";
+        pathPrefix = "image";
+      }
+    else if diskImage == "raw" then
+      {
+        isDirectory = false;
+        ext = ".raw.zst";
+        domain = "factory.talos.dev";
+        pathPrefix = "image";
+      }
+    else if diskImage == "qcow2" then
+      {
+        isDirectory = false;
+        ext = ".qcow2";
+        domain = "factory.talos.dev";
+        pathPrefix = "image";
+      }
+    else if diskImage == "pxe" then
+      {
+        # This downloads the iPXE script text file provided by Factory
+        isDirectory = false;
+        ext = "";
+        domain = "pxe.factory.talos.dev";
+        pathPrefix = "pxe";
+      }
+    else if diskImage == "pxe-assets" then
+      {
+        # NEW: Downloads kernel + initramfs into a folder
+        isDirectory = true;
+        ext = ""; # No single extension
+        domain = "factory.talos.dev";
+        pathPrefix = "image";
+      }
+    else
+      abort "Unknown diskImage type: ${diskImage}.";
 
   baseName = "${platform}-${arch}${secbootSuffix}";
   fileName = "${baseName}${imageConfig.ext}";
@@ -65,17 +82,20 @@ in
 pkgs.stdenvNoCC.mkDerivation {
   name = "talos-${version}-${baseName}";
   outputHashAlgo = "sha256";
-  outputHash     = sha256;
-  
+  outputHash = sha256;
+
   # Crucial Change: Switch hash mode based on whether we expect a file or directory
   outputHashMode = if imageConfig.isDirectory then "recursive" else "flat";
 
-  nativeBuildInputs = [ pkgs.curl pkgs.jq ];
-  
+  nativeBuildInputs = [
+    pkgs.curl
+    pkgs.jq
+  ];
+
   buildCommand = ''
     export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     export PATH="${pkgs.curl}/bin:${pkgs.jq}/bin:$PATH"
-    
+
     echo "--> Registering Talos Schematic..."
     echo "    Config: ${schematicJson}"
 
@@ -84,7 +104,7 @@ pkgs.stdenvNoCC.mkDerivation {
       -H "Content-Type: application/json" \
       --data-binary '${schematicJson}' \
       https://factory.talos.dev/schematics)
-    
+
     ID=$(echo "$RESPONSE" | jq -r '.id')
 
     if [ -z "$ID" ] || [ "$ID" == "null" ]; then
@@ -96,7 +116,7 @@ pkgs.stdenvNoCC.mkDerivation {
     echo "--> Success! Got Schematic ID: $ID"
 
     # --- STEP 2: Download the Assets ---
-    
+
     if [ "${toString imageConfig.isDirectory}" = "1" ]; then
         # === DIRECTORY MODE (pxe-assets) ===
         echo "--> Downloading PXE assets to directory..."

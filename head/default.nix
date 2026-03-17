@@ -17,11 +17,10 @@
 # Everything else (ZFS, users, SSH, tailscale, packages) belongs in
 # the lab repo's own configuration.nix.
 # =====================================================================
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 let
   inherit (lib) types mkOption mkEnableOption mkIf
-                concatMap concatMapStringsSep mapAttrsToList
-                concatLists toLower optionalAttrs;
+                concatMap;
 
   cfg = config.lab-setup.pxe;
 
@@ -147,9 +146,10 @@ in
 
     # ── TFTP directory tree ─────────────────────────────────────
     systemd.tmpfiles.rules = import ./pxe-boot.nix {
-      inherit pkgs ip;
-      cfg.machines
-      inspector
+      inherit pkgs;
+      ip = cfg.ip;
+      machines = cfg.machines;
+      inspector = inspector;
     } ++ [
       "z ${cfg.mount-point} 0777 nobody nogroup -"
     ];

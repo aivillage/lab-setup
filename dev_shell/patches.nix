@@ -3,7 +3,13 @@
 # Development-specific patches for QEMU Talos cluster
 # Uses con_shell patch generators with dev-specific overrides
 # =============================================================================
-{ pkgs, lib, config, name, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  name,
+  ...
+}:
 let
   inherit (lib) types mkOption mkIf;
 
@@ -22,7 +28,7 @@ let
     name = "generate-dev-patches";
     text = ''
       set -euo pipefail
-      
+
       echo "🔧 Generating development patches..."
       mkdir -p "${config.dataDir}"
       cp -f "${cilium_patch}" "${config.dataDir}/cilium.yaml"

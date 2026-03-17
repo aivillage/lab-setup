@@ -21,7 +21,7 @@ let
     storageClass = {
       name = "nfs-client";
       defaultClass = false;
-      reclaimPolicy = "Retain"; 
+      reclaimPolicy = "Retain";
     };
   };
 
@@ -29,8 +29,8 @@ let
   nfs_chart = kubelib.downloadHelmChart {
     repo = "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/";
     chart = "nfs-subdir-external-provisioner";
-    version = "4.0.18"; 
-    chartHash = "sha256-STkDh6TzNnouJvHYmwmm42dSN7vDfguxhOz01aOa3Dc="; 
+    version = "4.0.18";
+    chartHash = "sha256-STkDh6TzNnouJvHYmwmm42dSN7vDfguxhOz01aOa3Dc=";
   };
 
   # Render the Chart
@@ -42,17 +42,17 @@ let
   };
 
 in
-pkgs.runCommand "nfs-provisioner.yaml" {} ''
-    set -euo pipefail
-    
-    (
-      cat << 'PATCH_START'
-cluster:
-  inlineManifests:
-    - name: nfs-provisioner
-      contents: |
-PATCH_START
-      sed 's/^/        /' "${renderedNfsManifests}"
+pkgs.runCommand "nfs-provisioner.yaml" { } ''
+      set -euo pipefail
       
-    ) > "$out"
+      (
+        cat << 'PATCH_START'
+  cluster:
+    inlineManifests:
+      - name: nfs-provisioner
+        contents: |
+  PATCH_START
+        sed 's/^/        /' "${renderedNfsManifests}"
+        
+      ) > "$out"
 ''

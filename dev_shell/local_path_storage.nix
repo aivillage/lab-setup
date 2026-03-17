@@ -1,5 +1,10 @@
-  
-{ config, lib, name, pkgs, ... }:
+{
+  config,
+  lib,
+  name,
+  pkgs,
+  ...
+}:
 
 let
   inherit (lib) types mkOption;
@@ -13,7 +18,7 @@ let
   # It's the best way to run a sequence of commands in process-compose.
   setupScript = pkgs.writeShellApplication {
     name = "install-local-path";
-    
+
     # This ensures helm and kubectl are available in the script's PATH at runtime.
     runtimeInputs = [
       config.kubectlPackage

@@ -1,5 +1,10 @@
-{ inputs, pkgs, system, hostSystemName, ... }:
-let 
+{
+  inputs,
+  pkgs,
+  system,
+  ...
+}:
+let
   inherit (inputs.services-flake.lib) multiService;
   inherit (inputs) fenix;
   inherit (inputs) nix-kube-generators;
@@ -10,12 +15,12 @@ let
   isDarwin = pkgs.stdenv.isDarwin;
   isLinux = pkgs.stdenv.isLinux;
 
-  mkContainerScripts = import ./container_scripts.nix { 
-    inherit pkgs; 
+  mkContainerScripts = import ./container_scripts.nix {
+    inherit pkgs;
   };
 
-  talosConfigs = import ./talos-config.nix { 
-    inherit pkgs inputs; 
+  talosConfigs = import ./talos-config.nix {
+    inherit pkgs inputs;
     lib = pkgs.lib;
     clusterName = "aivProd";
     talosVersion = "v1.12.1";
@@ -45,106 +50,124 @@ let
     }
 
     # Nix builds - core components
-    { 
-      name = "workshop-sidecar"; 
-      path = "workshop-sidecar"; 
-      type = "nix"; 
+    {
+      name = "workshop-sidecar";
+      path = "workshop-sidecar";
+      type = "nix";
     }
-    { 
-      name = "workshop-hub"; 
-      path = "workshop-hub"; 
-      type = "nix"; 
+    {
+      name = "workshop-hub";
+      path = "workshop-hub";
+      type = "nix";
     }
   ];
 
-  cliTools = with pkgs; [
-    curl
-    talosctl
-    kubectl
-    kubernetes-helm
-    tilt
-    openssl
-    zsh
-    k9s
-    cilium-cli
-    hubble
-    sops
-    ssh-to-age
-  ] ++ myContainerScripts ++ [ rustToolchain talosConfigs talosPxe ];
+  cliTools =
+    with pkgs;
+    [
+      curl
+      talosctl
+      kubectl
+      kubernetes-helm
+      tilt
+      openssl
+      zsh
+      k9s
+      cilium-cli
+      hubble
+      sops
+      ssh-to-age
+    ]
+    ++ myContainerScripts
+    ++ [
+      rustToolchain
+      talosConfigs
+      talosPxe
+    ];
 in
 {
   shell = pkgs.mkShell {
-      name = "aiv-k8-dev";
+    name = "aiv-k8-dev";
 
-      # The packages available in the development environment
-      packages = cliTools;
+    # The packages available in the development environment
+    packages = cliTools;
 
-      # Setup hook that prepares environment and config files
-      shellHook = ''
-        ${if isDarwin then ''
-          # macOS-specific configuration
-          unset DEVELOPER_DIR
-        '' else ""}
+    # Setup hook that prepares environment and config files
+    shellHook = ''
+      ${
+        if isDarwin then
+          ''
+            # macOS-specific configuration
+            unset DEVELOPER_DIR
+          ''
+        else
+          ""
+      }
 
-        # Set up environment variables
-        export PROJECT_ROOT=$PWD
-        export DATA_DIR="$PROJECT_ROOT/.data"
+      # Set up environment variables
+      export PROJECT_ROOT=$PWD
+      export DATA_DIR="$PROJECT_ROOT/.data"
 
-        if [ -f .envhost ]; then
-          set -a
-          source .envhost
-          set +a
-          if [ -n "$GITHUB_USERNAME" ] && [ -n "$GHCR_PAT" ]; then
-            echo "Logging into ghcr.io..."
-            echo "$GHCR_PAT" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
-          fi
+      if [ -f .envhost ]; then
+        set -a
+        source .envhost
+        set +a
+        if [ -n "$GITHUB_USERNAME" ] && [ -n "$GHCR_PAT" ]; then
+          echo "Logging into ghcr.io..."
+          echo "$GHCR_PAT" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
         fi
-        # Todo: move this elsewhere
-        export TALOS_VERSION="v1.11.0"
-        export KUBECONFIG="$DATA_DIR/talos/kubeconfig"
-        export TALOSCONFIG="$DATA_DIR/talos/talosconfig"
-        export TALOS_STATE_DIR="$DATA_DIR/talos"
-        export DIRENV_WARN_TIMEOUT=0
-        export TF_DATA_DIR="$PROJECT_ROOT/.data/terraform"
-        export TF_VAR_kubeconfig="$KUBECONFIG"
-        export MC_CONFIG_DIR="$PROJECT_ROOT/.data/minio"
-        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
-      '';
+      fi
+      # Todo: move this elsewhere
+      export TALOS_VERSION="v1.11.0"
+      export KUBECONFIG="$DATA_DIR/talos/kubeconfig"
+      export TALOSCONFIG="$DATA_DIR/talos/talosconfig"
+      export TALOS_STATE_DIR="$DATA_DIR/talos"
+      export DIRENV_WARN_TIMEOUT=0
+      export TF_DATA_DIR="$PROJECT_ROOT/.data/terraform"
+      export TF_VAR_kubeconfig="$KUBECONFIG"
+      export MC_CONFIG_DIR="$PROJECT_ROOT/.data/minio"
+      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+    '';
   };
 
   conShell = pkgs.mkShell {
-      name = "aiv-k8-dev";
+    name = "aiv-k8-dev";
 
-      # The packages available in the development environment
-      packages = cliTools;
+    # The packages available in the development environment
+    packages = cliTools;
 
-      # Setup hook that prepares environment and config files
-      shellHook = ''
-        ${if isDarwin then ''
-          # macOS-specific configuration
-          unset DEVELOPER_DIR
-        '' else ""}
+    # Setup hook that prepares environment and config files
+    shellHook = ''
+      ${
+        if isDarwin then
+          ''
+            # macOS-specific configuration
+            unset DEVELOPER_DIR
+          ''
+        else
+          ""
+      }
 
-        # Set up environment variables
-        export PROJECT_ROOT=$PWD
-        export DEPLOYMENT_DIR="$PROJECT_ROOT/deployment"
+      # Set up environment variables
+      export PROJECT_ROOT=$PWD
+      export DEPLOYMENT_DIR="$PROJECT_ROOT/deployment"
 
-        if [ -f .envhost ]; then
-          set -a
-          source .envhost
-          set +a
-          if [ -n "$GITHUB_USERNAME" ] && [ -n "$GHCR_PAT" ]; then
-            echo "Logging into ghcr.io..."
-            echo "$GHCR_PAT" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
-          fi
+      if [ -f .envhost ]; then
+        set -a
+        source .envhost
+        set +a
+        if [ -n "$GITHUB_USERNAME" ] && [ -n "$GHCR_PAT" ]; then
+          echo "Logging into ghcr.io..."
+          echo "$GHCR_PAT" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
         fi
-        # Todo: move this elsewhere
-        export TALOS_VERSION="v1.12.1"
-        export KUBECONFIG="$DEPLOYMENT_DIR/talos/kubeconfig"
-        export TALOSCONFIG="$DEPLOYMENT_DIR/talos/talosconfig"
-        export TALOS_STATE_DIR="$DEPLOYMENT_DIR/talos"
-        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
-      '';
+      fi
+      # Todo: move this elsewhere
+      export TALOS_VERSION="v1.12.1"
+      export KUBECONFIG="$DEPLOYMENT_DIR/talos/kubeconfig"
+      export TALOSCONFIG="$DEPLOYMENT_DIR/talos/talosconfig"
+      export TALOS_STATE_DIR="$DEPLOYMENT_DIR/talos"
+      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+    '';
   };
 
   environment = {
@@ -156,7 +179,7 @@ in
       (multiService ./patches.nix)
       (multiService ./container_repository.nix)
     ];
-    
+
     services = {
       container_repository = {
         docker = {
@@ -231,23 +254,21 @@ in
         enable = true;
         kubeconfig = ".data/talos/kubeconfig";
       };
-      
+
       tilt = {
         tilt = {
           enable = true;
           dataDir = ".data/postgres";
-          hostname = hostSystemName;
-          runtimeInputs = [];
+          runtimeInputs = [ ];
           environment = {
             KUBECONFIG = ".data/talos/kubeconfig";
-            HOSTNAME = hostSystemName;
             NIX_CONFIG = "experimental-features = nix-command flakes";
             NIX_PATH = "nixpkgs=${pkgs.path}";
           };
         };
       };
     };
-    
+
     settings.processes.cluster.depends_on = {
       docker.condition = "process_started";
       k8s.condition = "process_started";

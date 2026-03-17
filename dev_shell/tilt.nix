@@ -1,15 +1,21 @@
-{ config, lib, name, pkgs, ... }:
+{
+  config,
+  lib,
+  name,
+  pkgs,
+  ...
+}:
 let
   inherit (lib) types;
 
-
   startScript = pkgs.writeShellApplication {
     name = "tilt-script";
-    
+
     # This ensures helm and kubectl are available in the script's PATH at runtime.
     runtimeInputs = [
       config.kubectlPackage
-    ] ++ config.runtimeInputs;
+    ]
+    ++ config.runtimeInputs;
 
     text = ''
       ${lib.getExe config.package} up --host ${config.hostname}
@@ -26,7 +32,7 @@ in
     };
     runtimeInputs = lib.mkOption {
       type = types.listOf types.package;
-      default = [];
+      default = [ ];
       description = "Extra packages tilt may need to execute";
     };
     hostname = lib.mkOption {
@@ -36,7 +42,7 @@ in
     };
     environment = lib.mkOption {
       type = types.attrsOf types.str;
-      default = {};
+      default = { };
       description = "Extra packages tilt may need to execute";
     };
     kubectlPackage = lib.mkOption {
@@ -51,14 +57,13 @@ in
     };
 
   };
-  
-  config =
-  {
+
+  config = {
     outputs.settings = {
-      processes = {        
+      processes = {
         "${name}" = {
           command = startScript;
-          
+
           environment = config.environment;
         };
       };

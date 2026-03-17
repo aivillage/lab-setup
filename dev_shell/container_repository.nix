@@ -1,5 +1,11 @@
 # nix/registry-mirror.nix
-{ pkgs, lib, config, name, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  name,
+  ...
+}:
 let
   inherit (lib) types mkOption mkIf;
 
@@ -8,17 +14,23 @@ let
   # dockerHost = "unix://${xdgRuntimeDir}/docker.sock";
 
   startCommand = [
-        "docker"
-        "run"
-        "--dns" "8.8.8.8"
-        "--rm" # Use --rm to auto-clean on stop
-        "-p" "${toString config.localPort}:5000"
-        "-e" "REGISTRY_PROXY_REMOTEURL=${config.remoteUrl}"
-        "-e" "REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry"
-        "-v" "${config.dataDir}/storage:/var/lib/registry"
-        "--name" config.containerName
-        "registry:2"
-      ];
+    "docker"
+    "run"
+    "--dns"
+    "8.8.8.8"
+    "--rm" # Use --rm to auto-clean on stop
+    "-p"
+    "${toString config.localPort}:5000"
+    "-e"
+    "REGISTRY_PROXY_REMOTEURL=${config.remoteUrl}"
+    "-e"
+    "REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry"
+    "-v"
+    "${config.dataDir}/storage:/var/lib/registry"
+    "--name"
+    config.containerName
+    "registry:2"
+  ];
 in
 {
   options = {

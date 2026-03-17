@@ -3,7 +3,7 @@
 #
 {
   pkgs,
-  kubelib ? null, 
+  kubelib ? null,
   name,
   server,
   path,
@@ -50,18 +50,18 @@ let
 
 in
 # This writes the string directly to the output file without any extra formatting/indentation
-pkgs.runCommand "model-store.yaml" {} ''
-    set -euo pipefail
-    
-    (
-      cat << 'PATCH_START'
-cluster:
-  inlineManifests:
-    - name: model-store
-      contents: |
-        ---
-PATCH_START
-      echo "${modelStoreManifests}" | sed 's/^/        /'
+pkgs.runCommand "model-store.yaml" { } ''
+      set -euo pipefail
       
-    ) > "$out"
+      (
+        cat << 'PATCH_START'
+  cluster:
+    inlineManifests:
+      - name: model-store
+        contents: |
+          ---
+  PATCH_START
+        echo "${modelStoreManifests}" | sed 's/^/        /'
+        
+      ) > "$out"
 ''

@@ -1,6 +1,17 @@
-{ pkgs, lib, config, name, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  name,
+  ...
+}:
 let
-  inherit (lib) types mkOption mkPackageOption mkIf;
+  inherit (lib)
+    types
+    mkOption
+    mkPackageOption
+    mkIf
+    ;
 
   KUBECONFIG = config.dataDir + "/kubeconfig";
   TALOSCONFIG = config.dataDir + "/talosconfig";
@@ -13,60 +24,105 @@ let
     };
   };
 
-  hashes = talosHashes.${config.talosVersion} or (throw "Unsupported Talos version: ${config.talosVersion}. Please add its hashes to the map in talos.nix.");
+  hashes =
+    talosHashes.${config.talosVersion}
+      or (throw "Unsupported Talos version: ${config.talosVersion}. Please add its hashes to the map in talos.nix.");
 
-  talosKernel = if config.provisioner == "qemu" then pkgs.fetchurl {
-    url = "https://github.com/siderolabs/talos/releases/download/${config.talosVersion}/vmlinuz-amd64";
-    sha256 = hashes.kernelSha256;
-  } else null;
+  talosKernel =
+    if config.provisioner == "qemu" then
+      pkgs.fetchurl {
+        url = "https://github.com/siderolabs/talos/releases/download/${config.talosVersion}/vmlinuz-amd64";
+        sha256 = hashes.kernelSha256;
+      }
+    else
+      null;
 
-  talosInitramfs = if config.provisioner == "qemu" then pkgs.fetchurl {
-    url = "https://github.com/siderolabs/talos/releases/download/${config.talosVersion}/initramfs-amd64.xz";
-    sha256 = hashes.initramfsSha256;
-  } else null;
+  talosInitramfs =
+    if config.provisioner == "qemu" then
+      pkgs.fetchurl {
+        url = "https://github.com/siderolabs/talos/releases/download/${config.talosVersion}/initramfs-amd64.xz";
+        sha256 = hashes.initramfsSha256;
+      }
+    else
+      null;
 
-  allPatchFiles = config.configPatches ++ (lib.optional (config.dynamicPatch != null)
-    "${config.dataDir}/dynamic-patch.yaml");
+  allPatchFiles =
+    config.configPatches
+    ++ (lib.optional (config.dynamicPatch != null) "${config.dataDir}/dynamic-patch.yaml");
 
   startCommandArgs =
-    (lib.optionals config.useSudo ["sudo" "-E"])
+    (lib.optionals config.useSudo [
+      "sudo"
+      "-E"
+    ])
     ++ [
       (lib.getExe config.package)
       "cluster"
       "create"
-      "--name" (lib.escapeShellArg config.clusterName)
-      "--state" (lib.escapeShellArg config.dataDir)
-      "--provisioner" (lib.escapeShellArg config.provisioner)
-      "--talosconfig" (lib.escapeShellArg TALOSCONFIG)
-      "--workers" (lib.escapeShellArg (toString config.workers))
-      "--controlplanes" (lib.escapeShellArg (toString config.controlplanes))
-      "--cpus" (lib.escapeShellArg config.cpus)
-      "--cpus-workers" (lib.escapeShellArg config.cpusWorkers)
-      "--memory" (lib.escapeShellArg (toString config.memory))
-      "--memory-workers" (lib.escapeShellArg (toString config.memoryWorkers))
+      "--name"
+      (lib.escapeShellArg config.clusterName)
+      "--state"
+      (lib.escapeShellArg config.dataDir)
+      "--provisioner"
+      (lib.escapeShellArg config.provisioner)
+      "--talosconfig"
+      (lib.escapeShellArg TALOSCONFIG)
+      "--workers"
+      (lib.escapeShellArg (toString config.workers))
+      "--controlplanes"
+      (lib.escapeShellArg (toString config.controlplanes))
+      "--cpus"
+      (lib.escapeShellArg config.cpus)
+      "--cpus-workers"
+      (lib.escapeShellArg config.cpusWorkers)
+      "--memory"
+      (lib.escapeShellArg (toString config.memory))
+      "--memory-workers"
+      (lib.escapeShellArg (toString config.memoryWorkers))
     ]
-    ++ (lib.concatMap (patchFile: [ "--config-patch" "@${(lib.escapeShellArg patchFile)}" ]) allPatchFiles)
-    ++ (lib.optionals (config.cidr != null) [ "--cidr" (lib.escapeShellArg config.cidr) ])
+    ++ (lib.concatMap (patchFile: [
+      "--config-patch"
+      "@${(lib.escapeShellArg patchFile)}"
+    ]) allPatchFiles)
+    ++ (lib.optionals (config.cidr != null) [
+      "--cidr"
+      (lib.escapeShellArg config.cidr)
+    ])
     ++ (lib.optional config.withDebug "--with-debug")
     ++ (lib.optional config.withKubespan "--with-kubespan")
     ++ (lib.optional config.withClusterDiscovery "--with-cluster-discovery")
-    ++ (lib.concatMap (mirror: [ "--registry-mirror" mirror ]) config.registryMirrors)
+    ++ (lib.concatMap (mirror: [
+      "--registry-mirror"
+      mirror
+    ]) config.registryMirrors)
     # QEMU-specific options
     ++ (lib.optionals (config.provisioner == "qemu") (
       [
-         "--extra-disks" (lib.escapeShellArg config.extra-disks)
-         "--extra-disks-size" (lib.escapeShellArg config.extra-disks-size)
-         "--extra-disks-drivers" (lib.escapeShellArg config.extra-disks-drivers)
-         "--disk" (lib.escapeShellArg config.disk)
-         "--initrd-path" (lib.escapeShellArg talosInitramfs)
-         "--vmlinuz-path" (lib.escapeShellArg talosKernel)
+        "--extra-disks"
+        (lib.escapeShellArg config.extra-disks)
+        "--extra-disks-size"
+        (lib.escapeShellArg config.extra-disks-size)
+        "--extra-disks-drivers"
+        (lib.escapeShellArg config.extra-disks-drivers)
+        "--disk"
+        (lib.escapeShellArg config.disk)
+        "--initrd-path"
+        (lib.escapeShellArg talosInitramfs)
+        "--vmlinuz-path"
+        (lib.escapeShellArg talosKernel)
       ]
       ++ (lib.optional config.withUefi "--with-uefi")
     ))
     # Docker-specific options
     ++ (lib.optionals (config.provisioner == "docker") (
-         (lib.optional (config.image != null) [ "--image" (lib.escapeShellArg config.image) ])
-      ++ (lib.optional (config.exposedPorts != null) [ "--exposed-ports" (lib.escapeShellArg config.exposedPorts) ])
+      (lib.optional (config.image != null) [
+        "--image"
+        (lib.escapeShellArg config.image)
+      ])
+      ++ (lib.optional (config.exposedPorts != null) [
+        "--exposed-ports"
+        (lib.escapeShellArg config.exposedPorts)
+      ])
     ));
 
   # Setup script that prepares directories and configuration
@@ -75,16 +131,16 @@ let
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
       echo "Setting up Talos environment..."
-      
+
       # Create required directories
       mkdir -p "${config.dataDir}"
-      
+
       # Create dynamic patch file if content is provided
       ${lib.optionalString (config.dynamicPatch != null) ''
-        echo "Creating dynamic patch file..."
-        cat > "${patch_file}" << 'EOF'
-        ${config.dynamicPatch}
-      EOF
+          echo "Creating dynamic patch file..."
+          cat > "${patch_file}" << 'EOF'
+          ${config.dynamicPatch}
+        EOF
       ''}
       echo "Talos setup complete"
     '';
@@ -93,18 +149,18 @@ let
   # Main start script for the Talos cluster
   startScript = pkgs.writeShellApplication {
     name = "start-talos";
-    runtimeInputs = with pkgs; [ 
-      config.package 
-      coreutils 
+    runtimeInputs = with pkgs; [
+      config.package
+      coreutils
     ];
     text = ''
       set -euo pipefail
-      
+
       echo "Starting Talos cluster '${config.clusterName}'..."
-      
+
       echo "Executing: ${(lib.concatStringsSep " " startCommandArgs)}"
       ${(lib.concatStringsSep " " startCommandArgs)}
-      
+
       # Fix permissions if running with sudo
       ${lib.optionalString config.useSudo ''
         if [ -f "${TALOSCONFIG}" ]; then
@@ -114,58 +170,61 @@ let
           sudo chown "$USER":"$USER" "${KUBECONFIG}"
         fi
       ''}
-      
+
       # Run post-start hook if provided
       ${lib.optionalString (config.postStartHook != null) config.postStartHook}
-      
+
       echo "Talos cluster '${config.clusterName}' started successfully"
     '';
   };
 
   # Cleanup script for destroying the cluster
   cleanupScript = ''
-      set +e  # Don't exit on error during cleanup
+    set +e  # Don't exit on error during cleanup
+
+    echo "Destroying Talos cluster '${config.clusterName}'..."
+
+    # Run pre-stop hook if provided
+    ${lib.optionalString (config.preStopHook != null) config.preStopHook}
+
+    if [ -d "${config.dataDir}" ]; then
+      CMD="${if config.useSudo then "sudo -E " else ""}${lib.getExe config.package} cluster destroy"
+      CMD="$CMD --name ${config.clusterName}"
+      CMD="$CMD --state ${config.dataDir}"
+      CMD="$CMD --provisioner ${config.provisioner}"
       
-      echo "Destroying Talos cluster '${config.clusterName}'..."
-      
-      # Run pre-stop hook if provided
-      ${lib.optionalString (config.preStopHook != null) config.preStopHook}
-      
-      if [ -d "${config.dataDir}" ]; then
-        CMD="${if config.useSudo then "sudo -E " else ""}${lib.getExe config.package} cluster destroy"
-        CMD="$CMD --name ${config.clusterName}"
-        CMD="$CMD --state ${config.dataDir}"
-        CMD="$CMD --provisioner ${config.provisioner}"
-        
-        echo "Executing: $CMD"
-        eval "$CMD" 2>/dev/null || {
-          echo "Warning: Failed to destroy cluster normally, attempting force cleanup..."
-          rm -rf "${config.dataDir}/${(lib.escapeShellArg config.clusterName)}"
-        }
-      fi
-      
-      # Clean up config files
-      rm -f "${TALOSCONFIG}" 2>/dev/null || true
-      rm -f "${KUBECONFIG}" 2>/dev/null || true
-      
-      echo "Talos cluster '${config.clusterName}' destroyed"
-    '';
+      echo "Executing: $CMD"
+      eval "$CMD" 2>/dev/null || {
+        echo "Warning: Failed to destroy cluster normally, attempting force cleanup..."
+        rm -rf "${config.dataDir}/${(lib.escapeShellArg config.clusterName)}"
+      }
+    fi
+
+    # Clean up config files
+    rm -f "${TALOSCONFIG}" 2>/dev/null || true
+    rm -f "${KUBECONFIG}" 2>/dev/null || true
+
+    echo "Talos cluster '${config.clusterName}' destroyed"
+  '';
 
   # Health check script
   healthCheckScript = pkgs.writeShellApplication {
     name = "check-talos";
-    runtimeInputs = [ config.package pkgs.kubectl ];
+    runtimeInputs = [
+      config.package
+      pkgs.kubectl
+    ];
     text = ''
       # Check if we can connect to Talos API
       ${lib.getExe config.package} --talosconfig "${TALOSCONFIG}" \
         cluster show --name "${config.clusterName}" >/dev/null 2>&1 || exit 1
-      
+
       # If kubectl check is enabled, verify k8s connectivity
       ${lib.optionalString config.checkKubectl ''
         export KUBECONFIG="${KUBECONFIG}"
         kubectl get nodes >/dev/null 2>&1 || exit 1
       ''}
-      
+
       exit 0
     '';
   };
@@ -181,7 +240,10 @@ in
     };
 
     provisioner = mkOption {
-      type = types.enum [ "docker" "qemu" ];
+      type = types.enum [
+        "docker"
+        "qemu"
+      ];
       default = "docker";
       description = "Provisioner to use for the cluster.";
     };
@@ -247,7 +309,14 @@ in
     };
 
     extra-disks-drivers = mkOption {
-      type = types.enum ["virtio" "ide" "ahci" "scsi" "nvme" "megaraid"];
+      type = types.enum [
+        "virtio"
+        "ide"
+        "ahci"
+        "scsi"
+        "nvme"
+        "megaraid"
+      ];
       default = "nvme";
       description = "Disk size in MB for each node.";
     };
@@ -302,14 +371,14 @@ in
 
     registryMirrors = mkOption {
       type = types.listOf types.str;
-      default = [];
+      default = [ ];
       description = "Registry mirrors to configure.";
       example = [ "docker.io=http://localhost:5000" ];
     };
 
     configPatches = mkOption {
       type = types.listOf types.str;
-      default = [];
+      default = [ ];
       description = "Configuration patch files to apply.";
     };
 
@@ -393,7 +462,7 @@ in
         environment = {
           KUBECONFIG = KUBECONFIG;
         };
-        
+
         depends_on."${name}-setup".condition = "process_completed_successfully";
         is_daemon = true;
         shutdown = {

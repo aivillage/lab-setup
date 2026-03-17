@@ -139,30 +139,30 @@ let
   };
 
 in
-pkgs.runCommand "cilium.yaml" {} ''
-    set -euo pipefail
-    
-    (
-      cat << 'PATCH_START'
-cluster:
-  network:
-    cni:
-      name: none
-  proxy:
-    disabled: true
-  inlineManifests:
-    - name: cilium
-      contents: |
-PATCH_START
-    
-      sed 's/^/        /' "${renderedCiliumManifests}"
-
-      cat << 'L2_START'
-    - name: cilium-l2
-      contents: |
-L2_START
-
-      echo "${l2Resources}" | sed 's/^/        /'
+pkgs.runCommand "cilium.yaml" { } ''
+      set -euo pipefail
       
-    ) > "$out"
+      (
+        cat << 'PATCH_START'
+  cluster:
+    network:
+      cni:
+        name: none
+    proxy:
+      disabled: true
+    inlineManifests:
+      - name: cilium
+        contents: |
+  PATCH_START
+      
+        sed 's/^/        /' "${renderedCiliumManifests}"
+
+        cat << 'L2_START'
+      - name: cilium-l2
+        contents: |
+  L2_START
+
+        echo "${l2Resources}" | sed 's/^/        /'
+        
+      ) > "$out"
 ''

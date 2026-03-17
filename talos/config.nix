@@ -5,7 +5,11 @@
 #   mkMachineConfig    — script that generates one machine's talos config,
 #                        taking the patches dir as input
 #
-{ pkgs, lib, inputs }:
+{
+  pkgs,
+  lib,
+  inputs,
+}:
 
 let
   # ── 1) Generate shared patches (helm + secrets) ───────────────
@@ -13,23 +17,24 @@ let
   # Writes cilium, ghcr, nvidia, nfs, model-store, etc. into a
   # directory. Run once, then point mkMachineConfig at the output.
   #
-  mkGeneratePatches = {
-    nfsServer ? null,
-    mainPath  ? null,
-    vllmPath  ? null,
-  }:
+  mkGeneratePatches =
+    {
+      nfsServer ? null,
+      mainPath ? null,
+      vllmPath ? null,
+    }:
     let
       kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
 
-      ciliumFile    = import ./patches/cilium.nix { inherit pkgs kubelib; };
-      ghcrAuthFile  = import ./patches/ghcr.nix { inherit pkgs; };
-      nvidia        = import ./patches/nvidia.nix { inherit pkgs kubelib; };
-      mainPvcFile   = import ./patches/nfs.nix {
+      ciliumFile = import ./patches/cilium.nix { inherit pkgs kubelib; };
+      ghcrAuthFile = import ./patches/ghcr.nix { inherit pkgs; };
+      nvidia = import ./patches/nvidia.nix { inherit pkgs kubelib; };
+      mainPvcFile = import ./patches/nfs.nix {
         inherit pkgs kubelib;
         server = nfsServer;
         path = mainPath;
       };
-      modelPvcFile  = import ./patches/model-store.nix {
+      modelPvcFile = import ./patches/model-store.nix {
         inherit pkgs kubelib;
         server = nfsServer;
         path = vllmPath;
@@ -60,10 +65,15 @@ let
   # Generates machine.install from machine.diskSelector.
   # Currently only diskSelector.size is supported.
   #
-  mkMachinePatch = machine:
+  mkMachinePatch =
+    machine:
     let
-      networkYaml = lib.concatMapStringsSep "\n" (dev:
-        let iface = machine.network-interfaces.${dev}; in ''
+      networkYaml = lib.concatMapStringsSep "\n" (
+        dev:
+        let
+          iface = machine.network-interfaces.${dev};
+        in
+        ''
           - interface: ${dev}
             dhcp: false
             addresses:
@@ -89,13 +99,14 @@ let
   # Layers: shared patches → control patch (if CP) → nvidia (if applicable)
   #         → machine patch → extraPatches
   #
-  mkMachineConfig = {
-    machine,
-    clusterName,
-    clusterEndpoint,
-    talosVersion,
-    primaryIp,
-  }:
+  mkMachineConfig =
+    {
+      machine,
+      clusterName,
+      clusterEndpoint,
+      talosVersion,
+      primaryIp,
+    }:
     let
       machinePatch = mkMachinePatch machine;
       outputType = if machine.controlPlane then "controlplane" else "worker";
@@ -110,17 +121,15 @@ let
         "control.yaml"
       ];
 
-      sharedFlags = lib.concatMapStringsSep " \\\n    "
-        (f: "--config-patch @\"$PATCHES_DIR/${f}\"") sharedPatches;
+      sharedFlags = lib.concatMapStringsSep " \\\n    " (
+        f: "--config-patch @\"$PATCHES_DIR/${f}\""
+      ) sharedPatches;
 
-      controlFlag = lib.optionalString machine.controlPlane
-        "--config-patch @\"$PATCHES_DIR/control.yaml\"";
+      controlFlag = lib.optionalString machine.controlPlane "--config-patch @\"$PATCHES_DIR/control.yaml\"";
 
-      nvidiaFlag = lib.optionalString machine.nvidia
-        "--config-patch @\"$PATCHES_DIR/nvidia-kernel.yaml\"";
+      nvidiaFlag = lib.optionalString machine.nvidia "--config-patch @\"$PATCHES_DIR/nvidia-kernel.yaml\"";
 
-      extraFlags = lib.concatMapStringsSep " \\\n    "
-        (p: "--config-patch @${p}") machine.extraPatches;
+      extraFlags = lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches;
     in
     pkgs.writeShellScriptBin "generate-config-${machine.name}" ''
       set -euo pipefail
