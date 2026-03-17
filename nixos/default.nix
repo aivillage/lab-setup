@@ -12,28 +12,19 @@ let
   inherit (lib) types mkOption mkEnableOption mkIf concatMap optional optionalAttrs;
   cfg = config.lab-setup.nas;
 
-  # ── Type definitions matching the exact inventory shape ────────
-  nodeType = types.submodule {
-    options = {
-      host     = mkOption { type = types.str; };
-      ip1      = mkOption { type = types.str; };
-      ip2      = mkOption { type = types.str; };
-      mac1     = mkOption { type = types.str; };
-      mac2     = mkOption { type = types.str; };
-      slowIp1  = mkOption { type = types.str; };
-      slowIp2  = mkOption { type = types.str; };
-      slowMac1 = mkOption { type = types.str; };
-      slowMac2 = mkOption { type = types.str; };
-    };
+  # In nixos/default.nix options section, replace control/workers with:
+  machines = mkOption {
+    type = types.listOf (import ../talos/machine.nix { inherit lib; });
+    default = [];
+    description = "All Talos machines in this cluster";
   };
 
-  # ── Derive dnsmasq dhcp-host lines from a node ────────────────
-  mkDhcpHosts = node: [
-    "${node.mac1},${node.ip1},${node.host}"
-    "${node.mac2},${node.ip2},${node.host}"
-    "${node.slowMac1},${node.slowIp1},${node.host}"
-    "${node.slowMac2},${node.slowIp2},${node.host}"
-  ];
+  mkDhcpHosts = machine:
+  lib.concatLists (lib.mapAttrsToList (_dev: iface: [
+    "${iface.mac},${iface.ip},${machine.name}"
+  ]) machine.network-interfaces);
+
+  allDhcpHosts = lib.concatMap mkDhcpHosts cfg.machines;
 
   allNodes = [ cfg.control ] ++ cfg.workers;
 
@@ -142,35 +133,6 @@ in
         type = types.str;
         default = "/var/keys/tailscale_key";
       };
-    };
-
-    # ── PXE / Talos boot ───────────────────────────────────────
-    pxe = {
-      enable = mkOption {
-        type = types.bool;
-        default = true;
-      };
-
-      talosImages = mkOption {
-        type = types.nullOr types.package;
-        default = null;
-        description = "Derivation with vmlinuz and initrd. Build via lab-setup.lib.mkTalosImage.";
-      };
-
-      bootMessage = mkOption {
-        type = types.str;
-        default = "Starting Talos Boot...";
-      };
-
-      kernelCmdline = mkOption {
-        type = types.str;
-        default = "talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1 module.sig_enforce=1";
-      };
-
-      # Override for inspector or other netboot targets
-      overrideKernel = mkOption { type = types.nullOr types.str; default = null; };
-      overrideInitrd = mkOption { type = types.nullOr types.str; default = null; };
-      overrideCmdline = mkOption { type = types.nullOr types.str; default = null; };
     };
 
     extraPackages = mkOption {
@@ -302,33 +264,16 @@ in
     };
 
     # ── 8. PXE / TFTP files ────────────────────────────────────
-    systemd.tmpfiles.rules = (lib.optionals cfg.pxe.enable (
-      let
-        kernelPath = if cfg.pxe.overrideKernel != null
-                     then cfg.pxe.overrideKernel
-                     else "${cfg.pxe.talosImages}/vmlinuz";
-        initrdPath = if cfg.pxe.overrideInitrd != null
-                     then cfg.pxe.overrideInitrd
-                     else "${cfg.pxe.talosImages}/initrd";
-        actualBootScript = if cfg.pxe.overrideCmdline != null
-          then pkgs.writeText "boot.ipxe" ''
-            #!ipxe
-            dhcp
-            echo ${cfg.pxe.bootMessage}
-            kernel tftp://${cfg.ip}/kernel ${cfg.pxe.overrideCmdline}
-            initrd tftp://${cfg.ip}/initrd
-            boot
-          ''
-          else bootScript;
-      in [
-        "d /var/lib/tftpboot 0755 root root -"
-        "L+ /var/lib/tftpboot/ipxe.efi - - - - ${pkgs.ipxe}/ipxe.efi"
-        "L+ /var/lib/tftpboot/undionly.kpxe - - - - ${pkgs.ipxe}/undionly.kpxe"
-        "L+ /var/lib/tftpboot/kernel - - - - ${kernelPath}"
-        "L+ /var/lib/tftpboot/initrd - - - - ${initrdPath}"
-        "L+ /var/lib/tftpboot/boot.ipxe - - - - ${actualBootScript}"
-      ]
-    )) ++ [
+    systemd.tmpfiles.rules = (lib.optionals cfg.pxe.enable import ./pxe-boot.nix {
+      inherit pkgs ip;
+      talos-machines  = talos-machines;
+      kernelPath = "${talosImages}/vmlinuz";  # Talos outputs 'vmlinuz'
+      initrdPath = "${talosImages}/initrd";
+      cmdline    = "talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1 module.sig_enforce=1";
+    } ++ [
+      # From Section 2 (ZFS) permit everyone
+      "z /mnt/data 0777 nobody nogroup -"
+    ]) ++ [
       "z ${cfg.zfs.mountPoint} 0777 nobody nogroup -"
     ];
 

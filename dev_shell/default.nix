@@ -24,25 +24,6 @@ let
     mainPath = "/mnt/data/dynamic-pvc";
     vllmPath = "/mnt/data/model-store";
   };
-  
-  talosPxe = import ./nas/talos-image.nix { 
-    inherit pkgs; 
-  } {
-    version = "v1.12.1";
-    platform = "metal";
-    arch = "amd64";
-    systemExtensions = [
-      "siderolabs/amd-ucode"
-      "siderolabs/intel-ucode"
-      "siderolabs/nvidia-container-toolkit-lts"
-      "siderolabs/nvidia-open-gpu-kernel-modules-lts"
-    ];
-    sha256 = "sha256-ctKKY9stHhMosgyKCDWQVMzOxv0wPnqsRitZlkhxYpY=";
-
-    # sha256 = pkgs.lib.fakeHash;
-
-    diskImage = "pxe-assets";
-  };
 
   myContainerScripts = mkContainerScripts [
     # Standard Dockerfile builds (type="docker" is default)
@@ -169,11 +150,11 @@ in
   environment = {
     imports = [
       inputs.services-flake.processComposeModules.default
-      (multiService ./dev_shell/tilt.nix)
-      (multiService ./dev_shell/local_path_storage.nix)
-      (multiService ./dev_shell/talos.nix)
-      (multiService ./dev_shell/patches.nix)
-      (multiService ./dev_shell/container_repository.nix)
+      (multiService ./tilt.nix)
+      (multiService ./local_path_storage.nix)
+      (multiService ./talos.nix)
+      (multiService ./patches.nix)
+      (multiService ./container_repository.nix)
     ];
     
     services = {
@@ -212,7 +193,6 @@ in
 
       patches."patch0" = {
         enable = true;
-        ciliumValuesFile = ../setup/k8/cilium-values.yaml;
         dataDir = ".data/talos-patches";
         kubelib = kubelib;
       };

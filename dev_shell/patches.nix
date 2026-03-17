@@ -8,12 +8,12 @@ let
   inherit (lib) types mkOption mkIf;
 
   # Import con_shell patch generators
-  cilium_patch = import ../patches/cilium.nix {
+  cilium_patch = import ../talos/patches/cilium.nix {
     inherit pkgs;
     kubelib = config.kubelib;
   };
 
-  ghcr_patch = import ../patches/ghcr.nix {
+  ghcr_patch = import ../talos/patches/ghcr.nix {
     inherit pkgs;
   };
 
