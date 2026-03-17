@@ -3,12 +3,23 @@
   kubelib,
 }:
 let
-  # --- Configuration ---
+  # ── Kernel modules patch (per-machine, conditional) ───────────
+  kernelModulesPatch = pkgs.writeText "nvidia-kernel-modules.yaml" ''
+    machine:
+      kernel:
+        modules:
+          - name: nvidia
+          - name: nvidia_uvm
+          - name: nvidia_drm
+          - name: nvidia_modeset
+      sysctls:
+        net.core.bpf_jit_harden: 1
+  '';
+
+  # ── Device plugin helm chart (cluster-wide) ───────────────────
   devicePluginValues = {
-    # If using Talos or a custom path, you might need to adjust these
-    # but defaults usually work for standard setups.
     gfd = {
-      enabled = true; # GPU Feature Discovery (labels nodes with GPU model/memory)
+      enabled = true;
     };
     affinity = {
       nodeAffinity = {
@@ -28,15 +39,13 @@ let
     };
   };
 
-  # Download the NVIDIA Device Plugin Chart
   nvidia_chart = kubelib.downloadHelmChart {
     repo = "https://nvidia.github.io/k8s-device-plugin";
     chart = "nvidia-device-plugin";
-    version = "v0.18.0"; 
-    chartHash = "sha256-B8kLxp/UvWZKUw8kRoLjSuDgvL+9IHyssJi+H3wnjHY="; # Run once to get hash
+    version = "v0.18.0";
+    chartHash = "sha256-B8kLxp/UvWZKUw8kRoLjSuDgvL+9IHyssJi+H3wnjHY=";
   };
 
-  # Render the Chart
   renderedNvidiaManifests = kubelib.buildHelmChart {
     name = "nvidia-device-plugin";
     chart = nvidia_chart;
@@ -44,8 +53,7 @@ let
     values = devicePluginValues;
   };
 
-in
-pkgs.runCommand "nvidia-plugin.yaml" {} ''
+  helmPatch = pkgs.runCommand "nvidia-plugin.yaml" {} ''
     set -euo pipefail
     
     (
@@ -59,4 +67,13 @@ PATCH_START
       sed 's/^/        /' "${renderedNvidiaManifests}"
       
     ) > "$out"
-''
+  '';
+
+in
+{
+  # Cluster-wide: the device plugin inline manifest
+  inherit helmPatch;
+
+  # Per-machine: kernel modules, only applied when machine.nvidia = true
+  inherit kernelModulesPatch;
+}

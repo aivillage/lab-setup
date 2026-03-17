@@ -1,6 +1,7 @@
 { pkgs, lib, inputs, nfsServer, mainPath, vllmPath, ... }:
 let
   kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
+
   ciliumFile = import ./cilium.nix {
     inherit pkgs kubelib;
   };
@@ -18,23 +19,25 @@ let
     path = vllmPath;
     name = "model-store";
   };
-  nvidiaHelmChart = import ./nvidia.nix {
+  nvidia = import ./nvidia.nix {
     inherit pkgs kubelib;
   };
 
 in {
-    all = [
-      (ciliumFile)
-      (ghcrAuthFile)
-      (mainPcvFile)
-      (modelPvcFile)
-      (nvidiaHelmChart)
-      ./control.yaml
-    ];
-    control = [
-      ./control/install.yaml
-    ];
-    worker = [
-      ./worker/install.yaml
-    ];
-  }
+  all = [
+    ciliumFile
+    ghcrAuthFile
+    mainPcvFile
+    modelPvcFile
+    nvidia.helmPatch
+    ./control.yaml
+  ];
+  control = [
+    ./control/install.yaml
+  ];
+  worker = [
+    ./worker/install.yaml
+  ];
+
+  inherit nvidia;
+}
