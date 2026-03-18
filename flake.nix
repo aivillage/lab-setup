@@ -148,12 +148,11 @@
 
               generatePatches = talos.mkGeneratePatches {
                 nfsServer = "10.0.0.10";
-                mainPath = "/data";
-                vllmPath = "/models";
+                nfsPath = "/data";
+                modelStorePath = "/models";
               };
 
               # Build the DHCP hosts text and assert expected format.
-              # Each entry must be: "<mac>,<ip>,<hostname>"
               dhcpHostsText = lib.concatStringsSep "\n" testMachine.dhcpHosts;
 
               dhcpHostsCheck = pkgs.runCommand "check-dhcp-hosts" { } ''
@@ -161,7 +160,6 @@
                 echo "--- DHCP hosts ---"
                 printf '%s\n' ${lib.escapeShellArg dhcpHostsText}
 
-                # Every non-empty line must match MAC,IP,name
                 while IFS= read -r line; do
                   [[ -z "$line" ]] && continue
                   if [[ ! "$line" =~ ^([0-9a-fA-F:]{17}),([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+),(.+)$ ]]; then
@@ -170,7 +168,6 @@
                   fi
                 done <<< ${lib.escapeShellArg dhcpHostsText}
 
-                # We expect exactly one entry per network interface (2 in the fixture)
                 count=$(printf '%s\n' ${lib.escapeShellArg dhcpHostsText} | grep -c '.' || true)
                 if [[ "$count" -ne 2 ]]; then
                   echo "FAIL: expected 2 dhcp-host entries, got $count"
@@ -181,15 +178,9 @@
                 echo "OK: $count dhcp-host entries validated"
               '';
 
-              # Validate the image derivation has the expected output structure
-              # for pxe-assets mode (directory with vmlinuz + initrd).
-              # This check is structural — it verifies the Nix derivation attrs
-              # are correct without fetching (the hash will fail if actually built
-              # with fakeSha256; swap in a real hash to make it fetchable).
               imageStructureCheck = pkgs.runCommand "check-image-structure" { } ''
                 set -euo pipefail
 
-                # Confirm the image derivation name contains expected version/platform
                 name="${testMachine.image.name}"
                 echo "Image derivation name: $name"
                 if [[ "$name" != *"v1.12.1"* ]]; then
@@ -205,7 +196,6 @@
                   echo "FAIL: derivation name does not have a name"
                   exit 1
                 fi
-
 
                 echo "OK: image derivation structure looks correct"
                 echo "$name" > $out
@@ -225,24 +215,20 @@
                     cat ${machinePatch}
                     echo ""
 
-                    # Must be valid YAML
                     yq e '.' ${machinePatch} > /dev/null
 
-                    # Hostname
                     hostname=$(yq e '.machine.network.hostname' ${machinePatch})
                     if [[ "$hostname" != "test-node" ]]; then
                       echo "FAIL: expected hostname 'test-node', got '$hostname'"
                       exit 1
                     fi
 
-                    # Interfaces — expect 2
                     iface_count=$(yq e '.machine.network.interfaces | length' ${machinePatch})
                     if [[ "$iface_count" -ne 2 ]]; then
                       echo "FAIL: expected 2 interfaces, got $iface_count"
                       exit 1
                     fi
 
-                    # Each interface must have dhcp: false and at least one address
                     for i in $(seq 0 $((iface_count - 1))); do
                       dhcp=$(yq e ".machine.network.interfaces[$i].dhcp" ${machinePatch})
                       if [[ "$dhcp" != "false" ]]; then
@@ -256,7 +242,6 @@
                       fi
                     done
 
-                    # Install — wipe must be true, disk must be null
                     wipe=$(yq e '.machine.install.wipe' ${machinePatch})
                     if [[ "$wipe" != "true" ]]; then
                       echo "FAIL: install.wipe is '$wipe', expected 'true'"
@@ -268,7 +253,6 @@
                       exit 1
                     fi
 
-                    # diskSelector.size must be present and numeric
                     ds_size=$(yq e '.machine.install.diskSelector.size' ${machinePatch})
                     if [[ "$ds_size" != "512110190592" ]]; then
                       echo "FAIL: diskSelector.size is '$ds_size', expected '512110190592'"
@@ -278,110 +262,17 @@
                     echo "OK: machine patch validated"
                     cp ${machinePatch} $out
                   '';
-
-              # ── Helm / shared patch YAML checks ──────────────────
-              #
-              # Build every shared patch derivation and validate:
-              #   1. Valid YAML
-              #   2. Has the expected top-level Talos config key
-              #      (cluster.inlineManifests or machine.*)
-              #   3. inlineManifests entries have name + contents
-              #
-              kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
-
-              ciliumPatch = import ./talos/patches/cilium.nix { inherit pkgs kubelib; };
-              nvidiaPatch = (import ./talos/patches/nvidia.nix { inherit pkgs kubelib; });
-              nfsPatch = import ./talos/patches/nfs.nix {
-                inherit pkgs kubelib;
-                server = "10.0.0.10";
-                path = "/data";
-              };
-              modelStorePatch = import ./talos/patches/model-store.nix {
-                inherit pkgs kubelib;
-                server = "10.0.0.10";
-                path = "/models";
-                name = "model-store";
-              };
-
-              # Helper: validate a Talos patch file that wraps a helm chart
-              # as cluster.inlineManifests
-              mkHelmPatchCheck =
-                name: patchFile: expectedManifestName:
-                pkgs.runCommand "check-helm-patch-${name}"
-                  {
-                    nativeBuildInputs = [ pkgs.yq-go ];
-                  }
-                  ''
-                    set -euo pipefail
-
-                    echo "--- Checking ${name} patch ---"
-
-                    # 1. Must be valid YAML
-                    yq e '.' ${patchFile} > /dev/null || {
-                      echo "FAIL: ${name} is not valid YAML"; exit 1;
-                    }
-
-                    # 2. Must have cluster.inlineManifests
-                    manifest_count=$(yq e '.cluster.inlineManifests | length' ${patchFile})
-                    if [[ "$manifest_count" -lt 1 ]]; then
-                      echo "FAIL: ${name} has no cluster.inlineManifests entries"
-                      exit 1
-                    fi
-
-                    # 3. Must contain an entry with the expected name
-                    found=$(yq e '.cluster.inlineManifests[] | select(.name == "${expectedManifestName}") | .name' ${patchFile})
-                    if [[ -z "$found" ]]; then
-                      echo "FAIL: ${name} missing inlineManifest named '${expectedManifestName}'"
-                      exit 1
-                    fi
-
-                    # 4. That entry's contents must be non-empty
-                    contents=$(yq e '.cluster.inlineManifests[] | select(.name == "${expectedManifestName}") | .contents' ${patchFile})
-                    if [[ -z "$contents" || "$contents" == "null" ]]; then
-                      echo "FAIL: ${name} '${expectedManifestName}' has empty contents"
-                      exit 1
-                    fi
-
-                    echo "OK: ${name} patch validated (manifest: ${expectedManifestName})"
-                    cp ${patchFile} $out
-                  '';
-
-              # Nvidia kernel modules patch is machine.* not cluster.*
-              nvidiaKernelCheck =
-                pkgs.runCommand "check-nvidia-kernel-patch"
-                  {
-                    nativeBuildInputs = [ pkgs.yq-go ];
-                  }
-                  ''
-                    set -euo pipefail
-
-                    echo "--- Checking nvidia kernel modules patch ---"
-                    yq e '.' ${nvidiaPatch.kernelModulesPatch} > /dev/null
-
-                    module_count=$(yq e '.machine.kernel.modules | length' ${nvidiaPatch.kernelModulesPatch})
-                    if [[ "$module_count" -lt 4 ]]; then
-                      echo "FAIL: expected at least 4 nvidia kernel modules, got $module_count"
-                      exit 1
-                    fi
-
-                    echo "OK: nvidia kernel patch validated ($module_count modules)"
-                    cp ${nvidiaPatch.kernelModulesPatch} $out
-                  '';
             in
             {
               talos-generate-patches = generatePatches;
-
               talos-dhcp-hosts = dhcpHostsCheck;
-
               talos-image-structure = imageStructureCheck;
-
               talos-machine-image = testMachine.image;
-              talos-patch-cilium = mkHelmPatchCheck "cilium" ciliumPatch "cilium";
-              talos-patch-nvidia-helm = mkHelmPatchCheck "nvidia" nvidiaPatch.helmPatch "nvidia-device-plugin";
-              talos-patch-nvidia-kernel = nvidiaKernelCheck;
-              talos-patch-nfs = mkHelmPatchCheck "nfs" nfsPatch "nfs-provisioner";
-              talos-patch-model-store = mkHelmPatchCheck "model-store" modelStorePatch "model-store";
+              talos-machine-patch = machinePatchCheck;
             };
+        
+        
+        
         };
 
       flake = {

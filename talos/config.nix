@@ -1,13 +1,13 @@
 # ═══════════════════════════════════════════════════════════════════
-# FILE 1: talos/config.nix  (full replacement)
-# ═══════════════════════════════════════════════════════════════════
+# talos/config.nix
 #
 # Three concerns, cleanly separated:
 #   mkMachinePatch     — per-machine YAML patch (hostname, network, disk)
 #   mkMachineConfig    — generates one machine's talos config from a
 #                        patches directory (no baked-in patch list)
-#   mkGeneratePatches  — lab-specific helper that writes patch files
-#                        from a list of { name, file } attrsets
+#   mkGeneratePatches  — builds cilium, nvidia, nfs, and model-store
+#                        patches from lab parameters and writes them
+#                        to a directory
 #
 {
   pkgs,
@@ -16,11 +16,9 @@
 }:
 
 let
+  kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
+
   # ── Per-machine patch: hostname + network + install ───────────
-  #
-  # Generates machine.install from machine.diskSelector.
-  # Currently only diskSelector.size is supported.
-  #
   mkMachinePatch =
     machine:
     let
@@ -29,12 +27,7 @@ let
         let
           iface = machine.network-interfaces.${dev};
         in
-        ''
-          - interface: ${dev}
-            dhcp: false
-            addresses:
-              - ${iface.ip}/24
-        ''
+        "      - interface: ${dev}\n        dhcp: false\n        addresses:\n          - ${iface.ip}/24"
       ) (lib.attrNames machine.network-interfaces);
     in
     pkgs.writeText "${machine.name}-machine-patch.yaml" ''
@@ -50,16 +43,42 @@ let
             size: ${toString machine.diskSelector.size}
     '';
 
-  # ── Generate a patches directory from a list of files ─────────
+  # ── Generate a patches directory ──────────────────────────────
   #
-  # Takes a list of { name = "cilium.yaml"; file = <derivation>; }
-  # and writes them all into a directory. Each lab composes its own
-  # patch set; lab-setup doesn't dictate which patches exist.
+  # Accepts lab-specific parameters (NFS server, paths, model store)
+  # and builds cilium, nvidia, nfs, and model-store patches internally.
+  # Extra { name, file } patches can be appended via `extraPatches`.
   #
   mkGeneratePatches =
     {
-      patches ? [ ],
+      nfsServer,
+      nfsPath,
+      modelStoreName ? "model-store",
+      modelStorePath,
+      extraPatches ? [ ],
     }:
+    let
+      ciliumPatch = import ./patches/cilium.nix { inherit pkgs kubelib; };
+      nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
+      nfsPatch = import ./patches/nfs.nix {
+        inherit pkgs kubelib;
+        server = nfsServer;
+        path = nfsPath;
+      };
+      modelStorePatch = import ./patches/model-store.nix {
+        inherit pkgs kubelib;
+        server = nfsServer;
+        path = modelStorePath;
+        name = modelStoreName;
+      };
+
+      patches = [
+        { name = "cilium.yaml"; file = ciliumPatch; }
+        { name = "nvidia-helm.yaml"; file = nvidiaPatch.helmPatch; }
+        { name = "nfs.yaml"; file = nfsPatch; }
+        { name = "model-store.yaml"; file = modelStorePatch; }
+      ] ++ extraPatches;
+    in
     pkgs.writeShellScriptBin "generate-patches" ''
       set -euo pipefail
 
@@ -76,13 +95,6 @@ let
     '';
 
   # ── Generate a single machine's config ────────────────────────
-  #
-  # Applies every *.yaml in the patches directory, plus the machine
-  # patch and (conditionally) the nvidia kernel patch.
-  #
-  # The patches directory is opaque — whatever the lab's
-  # generate-patches put in there gets applied. No hardcoded list.
-  #
   mkMachineConfig =
     {
       machine,
