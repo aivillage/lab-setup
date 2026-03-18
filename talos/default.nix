@@ -13,7 +13,7 @@ let
 
   configLib = import ./config.nix { inherit pkgs lib inputs; };
 
-  mkSchematic = import ./schematic.nix { inherit pkgs; };
+  mkSchematic = (import ./schematic.nix { inherit pkgs lib; }).mkSchematic;
 
   mkImage =
     {
@@ -21,7 +21,6 @@ let
       schematic,
     }:
     import ./image.nix { inherit pkgs; } {
-      machine = machine;
       version = machine.version;
       sha256 = machine.sha256;
       schematic = schematic;
@@ -31,14 +30,12 @@ let
     };
 
   machine =
-    {
-      machine,
-      ...
-    }@args:
+    machineAttrs:
     let
+      machine = machineAttrs;
       schematic = mkSchematic {
         machine = machine;
-        outputHash = machine.schematicSha256;
+        sha256 = machine.schematicSha256;
       };
       installerImage = "factory.talos.dev/installer/${builtins.readFile schematic}:${machine.version}";
     in

@@ -84,8 +84,8 @@ pkgs.stdenvNoCC.mkDerivation {
         mkdir -p $out
 
         # Construct URLs for Kernel and Initramfs
-        KERNEL_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${schematic.id}/${version}/kernel-${arch}"
-        INITRD_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${schematic.id}/${version}/initramfs-${arch}.xz"
+        KERNEL_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${builtins.readFile schematic}/${version}/kernel-${arch}"
+        INITRD_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${builtins.readFile schematic}/${version}/initramfs-${arch}.xz"
 
         echo "    Fetching Kernel: $KERNEL_URL"
         curl -L --fail --show-error --progress-bar -o $out/vmlinuz "$KERNEL_URL"
@@ -95,7 +95,7 @@ pkgs.stdenvNoCC.mkDerivation {
 
     else
         # === SINGLE FILE MODE (iso, raw, pxe-script) ===
-        URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${schematic.id}/${version}/${fileName}"
+        URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${builtins.readFile schematic}/${version}/${fileName}"
         echo "--> Downloading single image from: $URL"
         curl -L --fail --show-error --progress-bar -o $out "$URL"
     fi

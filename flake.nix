@@ -32,6 +32,7 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
       ];
 
       forEachSystem =
@@ -124,8 +125,8 @@
               testMachine = talos.machine {
                 name = "test-node";
                 version = "v1.12.1";
-                sha256 = "sha256-Hj2L6bcDnTItd2XlP4UzEQ1W89F5QxkjY0TNL74wmfw=";
-                schematicSha256 = pkgs.lib.fakeSha256;
+                sha256 = "sha256-5IgKMWkDa4/VkEvD/x7Tr+YebilFJQCk/UoPL7WW1BE=";
+                schematicSha256 = "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ=";
                 controlPlane = true;
                 network-interfaces = {
                   enp1s0 = {
@@ -191,7 +192,7 @@
                 # Confirm the image derivation name contains expected version/platform
                 name="${testMachine.image.name}"
                 echo "Image derivation name: $name"
-                if [[ "$name" != *"v1.9.0"* ]]; then
+                if [[ "$name" != *"v1.12.1"* ]]; then
                   echo "FAIL: derivation name does not include version"
                   exit 1
                 fi
