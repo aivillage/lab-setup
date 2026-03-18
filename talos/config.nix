@@ -75,11 +75,24 @@ let
       };
 
       patches = [
-        { name = "cilium.yaml"; file = ciliumPatch; }
-        { name = "nvidia-helm.yaml"; file = nvidiaPatch.helmPatch; }
-        { name = "nfs.yaml"; file = nfsPatch; }
-        { name = "model-store.yaml"; file = modelStorePatch; }
-      ] ++ extraPatches;
+        {
+          name = "cilium.yaml";
+          file = ciliumPatch;
+        }
+        {
+          name = "nvidia-helm.yaml";
+          file = nvidiaPatch.helmPatch;
+        }
+        {
+          name = "nfs.yaml";
+          file = nfsPatch;
+        }
+        {
+          name = "model-store.yaml";
+          file = modelStorePatch;
+        }
+      ]
+      ++ extraPatches;
     in
     pkgs.writeShellScriptBin "generate-patches" ''
       set -euo pipefail
@@ -150,6 +163,8 @@ let
         --config-patch @${machinePatch} \
         ${lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches} \
         $SECRETS_FLAG \
+        --with-docs=false \
+        --with-examples=false \
         --force
 
       chmod 644 "${machine.name}.yaml"
