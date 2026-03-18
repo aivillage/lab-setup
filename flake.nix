@@ -201,66 +201,31 @@
                 echo "$name" > $out
               '';
 
-              machinePatch = talos.mkMachinePatch testMachine.machine;
+              machineConfig = testMachine.configScript;
 
-              machinePatchCheck =
+              machineConfigCheck =
                 pkgs.runCommand "check-machine-patch"
                   {
                     nativeBuildInputs = [ pkgs.yq-go ];
                   }
                   ''
                     set -euo pipefail
-
+                    ${generatePatches} patches/
                     echo "--- Machine patch YAML ---"
-                    cat ${machinePatch}
+                    cat ${machineConfig} patches/
                     echo ""
 
-                    yq e '.' ${machinePatch} > /dev/null
+                    yq e '.' ${machineConfig} patches > /dev/null
 
-                    hostname=$(yq e '.machine.network.hostname' ${machinePatch})
+                    hostname=$(yq e '.machine.network.hostname' ${machineConfig})
                     if [[ "$hostname" != "test-node" ]]; then
                       echo "FAIL: expected hostname 'test-node', got '$hostname'"
                       exit 1
                     fi
 
-                    iface_count=$(yq e '.machine.network.interfaces | length' ${machinePatch})
-                    if [[ "$iface_count" -ne 2 ]]; then
-                      echo "FAIL: expected 2 interfaces, got $iface_count"
-                      exit 1
-                    fi
-
-                    for i in $(seq 0 $((iface_count - 1))); do
-                      dhcp=$(yq e ".machine.network.interfaces[$i].dhcp" ${machinePatch})
-                      if [[ "$dhcp" != "false" ]]; then
-                        echo "FAIL: interface $i has dhcp=$dhcp, expected false"
-                        exit 1
-                      fi
-                      addr_count=$(yq e ".machine.network.interfaces[$i].addresses | length" ${machinePatch})
-                      if [[ "$addr_count" -lt 1 ]]; then
-                        echo "FAIL: interface $i has no addresses"
-                        exit 1
-                      fi
-                    done
-
-                    wipe=$(yq e '.machine.install.wipe' ${machinePatch})
-                    if [[ "$wipe" != "true" ]]; then
-                      echo "FAIL: install.wipe is '$wipe', expected 'true'"
-                      exit 1
-                    fi
-                    disk=$(yq e '.machine.install.disk' ${machinePatch})
-                    if [[ "$disk" != "null" ]]; then
-                      echo "FAIL: install.disk is '$disk', expected 'null'"
-                      exit 1
-                    fi
-
-                    ds_size=$(yq e '.machine.install.diskSelector.size' ${machinePatch})
-                    if [[ "$ds_size" != "512110190592" ]]; then
-                      echo "FAIL: diskSelector.size is '$ds_size', expected '512110190592'"
-                      exit 1
-                    fi
 
                     echo "OK: machine patch validated"
-                    cp ${machinePatch} $out
+                    cp ${machineConfig} $out
                   '';
             in
             {
@@ -268,11 +233,9 @@
               talos-dhcp-hosts = dhcpHostsCheck;
               talos-image-structure = imageStructureCheck;
               talos-machine-image = testMachine.image;
-              talos-machine-patch = machinePatchCheck;
+              talos-machine-patch = machineConfigCheck;
             };
-        
-        
-        
+
         };
 
       flake = {

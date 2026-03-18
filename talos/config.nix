@@ -20,8 +20,9 @@ let
 
   # ── Per-machine patch: hostname + network + install ───────────
   mkMachinePatch =
-    machine:
+    { machine, schematic }:
     let
+      installerImage = "factory.talos.dev/installer/${builtins.readFile schematic}:${machine.version}";
       networkYaml = lib.concatMapStringsSep "\n" (
         dev:
         let
@@ -37,6 +38,7 @@ let
           interfaces:
       ${networkYaml}
         install:
+          image: ${installerImage}
           disk: null
           wipe: true
           diskSelector:
@@ -101,10 +103,11 @@ let
       clusterName,
       clusterEndpoint,
       talosVersion,
+      schematic,
       nvidiaKernelPatch ? null,
     }:
     let
-      machinePatch = mkMachinePatch machine;
+      machinePatch = mkMachinePatch { inherit machine schematic; };
       outputType = if machine.controlPlane then "controlplane" else "worker";
     in
     pkgs.writeShellScriptBin "generate-config-${machine.name}" ''
