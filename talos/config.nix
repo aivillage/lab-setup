@@ -1,9 +1,13 @@
-# lab-setup/talos/config.nix
+# ═══════════════════════════════════════════════════════════════════
+# FILE 1: talos/config.nix  (full replacement)
+# ═══════════════════════════════════════════════════════════════════
 #
-# Two concerns:
-#   mkGeneratePatches  — script that writes all helm/secret patches to a dir
-#   mkMachineConfig    — script that generates one machine's talos config,
-#                        taking the patches dir as input
+# Three concerns, cleanly separated:
+#   mkMachinePatch     — per-machine YAML patch (hostname, network, disk)
+#   mkMachineConfig    — generates one machine's talos config from a
+#                        patches directory (no baked-in patch list)
+#   mkGeneratePatches  — lab-specific helper that writes patch files
+#                        from a list of { name, file } attrsets
 #
 {
   pkgs,
@@ -12,54 +16,6 @@
 }:
 
 let
-  # ── 1) Generate shared patches (helm + secrets) ───────────────
-  #
-  # Writes cilium, ghcr, nvidia, nfs, model-store, etc. into a
-  # directory. Run once, then point mkMachineConfig at the output.
-  #
-  mkGeneratePatches =
-    {
-      nfsServer ? null,
-      mainPath ? null,
-      vllmPath ? null,
-    }:
-    let
-      kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
-
-      ciliumFile = import ./patches/cilium.nix { inherit pkgs kubelib; };
-      ghcrAuthFile = import ./patches/ghcr.nix { inherit pkgs; };
-      nvidia = import ./patches/nvidia.nix { inherit pkgs kubelib; };
-      mainPvcFile = import ./patches/nfs.nix {
-        inherit pkgs kubelib;
-        server = nfsServer;
-        path = mainPath;
-      };
-      modelPvcFile = import ./patches/model-store.nix {
-        inherit pkgs kubelib;
-        server = nfsServer;
-        path = vllmPath;
-        name = "model-store";
-      };
-    in
-    pkgs.writeShellScriptBin "generate-patches" ''
-      set -euo pipefail
-
-      OUTPUT_DIR="''${1:-.talos/patches}"
-      mkdir -p "$OUTPUT_DIR"
-
-      echo "Generating shared patches → $OUTPUT_DIR"
-
-      cp -f ${ciliumFile}                  "$OUTPUT_DIR/cilium.yaml"
-      cp -f ${ghcrAuthFile}                "$OUTPUT_DIR/ghcr.yaml"
-      cp -f ${nvidia.helmPatch}            "$OUTPUT_DIR/nvidia-plugin.yaml"
-      cp -f ${nvidia.kernelModulesPatch}   "$OUTPUT_DIR/nvidia-kernel.yaml"
-      cp -f ${mainPvcFile}                 "$OUTPUT_DIR/nfs.yaml"
-      cp -f ${modelPvcFile}                "$OUTPUT_DIR/model-store.yaml"
-      cp -f ${./patches/control.yaml}      "$OUTPUT_DIR/control.yaml"
-
-      echo "✅ Patches written to $OUTPUT_DIR"
-    '';
-
   # ── Per-machine patch: hostname + network + install ───────────
   #
   # Generates machine.install from machine.diskSelector.
@@ -94,10 +50,38 @@ let
             size: ${toString machine.diskSelector.size}
     '';
 
-  # ── 2) Generate a single machine's config ─────────────────────
+  # ── Generate a patches directory from a list of files ─────────
   #
-  # Layers: shared patches → control patch (if CP) → nvidia (if applicable)
-  #         → machine patch → extraPatches
+  # Takes a list of { name = "cilium.yaml"; file = <derivation>; }
+  # and writes them all into a directory. Each lab composes its own
+  # patch set; lab-setup doesn't dictate which patches exist.
+  #
+  mkGeneratePatches =
+    {
+      patches ? [ ],
+    }:
+    pkgs.writeShellScriptBin "generate-patches" ''
+      set -euo pipefail
+
+      OUTPUT_DIR="''${1:-.talos/patches}"
+      mkdir -p "$OUTPUT_DIR"
+
+      echo "Generating shared patches → $OUTPUT_DIR"
+
+      ${lib.concatMapStringsSep "\n" (p: ''
+        cp -f ${p.file} "$OUTPUT_DIR/${p.name}"
+      '') patches}
+
+      echo "✅ ${toString (builtins.length patches)} patches written to $OUTPUT_DIR"
+    '';
+
+  # ── Generate a single machine's config ────────────────────────
+  #
+  # Applies every *.yaml in the patches directory, plus the machine
+  # patch and (conditionally) the nvidia kernel patch.
+  #
+  # The patches directory is opaque — whatever the lab's
+  # generate-patches put in there gets applied. No hardcoded list.
   #
   mkMachineConfig =
     {
@@ -105,31 +89,11 @@ let
       clusterName,
       clusterEndpoint,
       talosVersion,
-      primaryIp,
+      nvidiaKernelPatch ? null,
     }:
     let
       machinePatch = mkMachinePatch machine;
       outputType = if machine.controlPlane then "controlplane" else "worker";
-
-      # Shared patches applied to every node
-      sharedPatches = [
-        "cilium.yaml"
-        "ghcr.yaml"
-        "nfs.yaml"
-        "model-store.yaml"
-        "nvidia-plugin.yaml"
-        "control.yaml"
-      ];
-
-      sharedFlags = lib.concatMapStringsSep " \\\n    " (
-        f: "--config-patch @\"$PATCHES_DIR/${f}\""
-      ) sharedPatches;
-
-      controlFlag = lib.optionalString machine.controlPlane "--config-patch @\"$PATCHES_DIR/control.yaml\"";
-
-      nvidiaFlag = lib.optionalString machine.nvidia "--config-patch @\"$PATCHES_DIR/nvidia-kernel.yaml\"";
-
-      extraFlags = lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches;
     in
     pkgs.writeShellScriptBin "generate-config-${machine.name}" ''
       set -euo pipefail
@@ -147,6 +111,18 @@ let
         SECRETS_FLAG="--with-secrets $SECRETS_FILE"
       fi
 
+      # Collect all *.yaml files in the patches directory
+      PATCH_FLAGS=""
+      for f in "$PATCHES_DIR"/*.yaml; do
+        [ -f "$f" ] || continue
+        PATCH_FLAGS="$PATCH_FLAGS --config-patch @$f"
+      done
+
+      ${lib.optionalString (machine.nvidia && nvidiaKernelPatch != null) ''
+        # Nvidia kernel modules — per-machine, only for GPU nodes
+        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaKernelPatch}"
+      ''}
+
       echo "Generating config for ${machine.name} (${outputType})..."
 
       ${pkgs.talosctl}/bin/talosctl gen config \
@@ -155,10 +131,9 @@ let
         --talos-version "${talosVersion}" \
         --output-types "${outputType}" \
         --output "${machine.name}.yaml" \
-        ${sharedFlags} \
-        ${nvidiaFlag} \
+        $PATCH_FLAGS \
         --config-patch @${machinePatch} \
-        ${extraFlags} \
+        ${lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches} \
         $SECRETS_FLAG \
         --force
 
@@ -168,5 +143,5 @@ let
 
 in
 {
-  inherit mkGeneratePatches mkMachineConfig;
+  inherit mkGeneratePatches mkMachineConfig mkMachinePatch;
 }

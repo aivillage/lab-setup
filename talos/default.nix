@@ -58,5 +58,5 @@ let
 in
 {
   inherit machine mkImage;
-  inherit (configLib) mkGeneratePatches mkMachineConfig;
+  inherit (configLib) mkGeneratePatches mkMachineConfig mkMachinePatch;
 }
