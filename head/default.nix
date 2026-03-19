@@ -54,6 +54,12 @@ in
       default = "10.211.0.10";
     };
 
+    domain = mkOption {
+      type = types.str;
+      default = "aicl.local";
+      description = "Domain name for dnsmasq";
+    };
+
     wipe = mkOption {
       type = types.bool;
       default = false;
