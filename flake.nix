@@ -335,7 +335,7 @@
               imports = [ ./head/default.nix ];
               _module.args.inspector = self.nixosConfigurations.inspector;
             };
-          head-iso = import ./head/iso.nix;
+          iso = import ./head/iso.nix;
         };
       };
     };
