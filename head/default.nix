@@ -172,11 +172,17 @@ in
 
     # ── Firewall: open DHCP + DNS + TFTP ────────────────────────
     networking.firewall = {
-      allowedTCPPorts = [ 53 ];
+      allowedTCPPorts = [
+        53
+        111
+        2049
+      ];
       allowedUDPPorts = [
         53
         67
         69
+        111
+        2049
       ];
     };
 
