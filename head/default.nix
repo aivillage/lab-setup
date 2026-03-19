@@ -193,7 +193,7 @@ in
         inherit pkgs;
         ip = cfg.ip;
         machines = lib.attrValues cfg.machines;
-        inspector = inspector;
+        inspector = inspector.config.system.build;
         wipe = cfg.wipe;
       }
       ++ [
