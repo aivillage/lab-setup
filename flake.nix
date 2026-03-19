@@ -65,6 +65,7 @@
             pkgs.pkg-config
             pkgs.openssl
             pkgs.cmake
+            pkgs.makeWrapper
           ];
           buildAndTestSubdir = "crates/inspector";
           env.LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
