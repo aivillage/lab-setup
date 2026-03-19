@@ -23,20 +23,12 @@ let
     { machine, schematic }:
     let
       installerImage = "factory.talos.dev/installer/${builtins.readFile schematic}:${machine.version}";
-      networkYaml = lib.concatMapStringsSep "\n" (
-        dev:
-        let
-          iface = machine.network-interfaces.${dev};
-        in
-        "      - interface: ${dev}\n        dhcp: false\n        addresses:\n          - ${iface.ip}/24"
-      ) (lib.attrNames machine.network-interfaces);
     in
     pkgs.writeText "${machine.name}-machine-patch.yaml" ''
       machine:
         network:
           hostname: ${machine.name}
           interfaces:
-      ${networkYaml}
         install:
           image: ${installerImage}
           disk: null
