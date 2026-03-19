@@ -45,6 +45,47 @@
           }
         );
 
+      # ── inspector-bin ────────────────────────────────────────
+      mkInspectorBin =
+        { pkgs, system }:
+        let
+          rustToolchain = fenix.packages.${system}.stable.minimalToolchain;
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+        in
+        rustPlatform.buildRustPackage {
+          pname = "inspector";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          buildInputs = [ pkgs.openssl ];
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.openssl
+            pkgs.cmake
+          ];
+          buildAndTestSubdir = "crates/inspector";
+          env.LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
+          cargoBuildFlags = [
+            "-p"
+            "inspector"
+          ];
+          doCheck = false;
+          postInstall = ''
+            wrapProgram $out/bin/inspector \
+              --prefix PATH : ${
+                pkgs.lib.makeBinPath [
+                  pkgs.util-linux
+                  pkgs.gptfdisk
+                  pkgs.coreutils
+                ]
+              }
+          '';
+          meta.mainProgram = "inspector";
+        };
+
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = supportedSystems;
@@ -62,6 +103,18 @@
         {
           process-compose."default" = dev_shell.environment;
           devShells.default = dev_shell.shell;
+
+          packages = {
+            inspector-bin = mkInspectorBin { inherit pkgs system; };
+          }
+          // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            nas-installer-iso =
+              (nixpkgs.lib.nixosSystem {
+                inherit system;
+                specialArgs = { inherit inputs; };
+                modules = [ ./head/iso.nix ];
+              }).config.system.build.images.iso-installer;
+          };
 
           checks =
             let
@@ -260,9 +313,29 @@
             talos = import ./talos/default.nix { inherit pkgs lib inputs; };
           };
 
+        nixosConfigurations.inspector = nixpkgs.lib.nixosSystem {
+          system = "x86_64-linux";
+          specialArgs = {
+            inherit inputs;
+            inspectorBin = mkInspectorBin {
+              pkgs = nixpkgs.legacyPackages."x86_64-linux";
+              system = "x86_64-linux";
+            };
+          };
+          modules = [
+            (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
+            ./head/inspector.nix
+          ];
+        };
+
         nixosModules = {
-          pxe = import ./head/default.nix;
-          iso = import ./head/iso.nix;
+          pxe =
+            { ... }:
+            {
+              imports = [ ./head/default.nix ];
+              _module.args.inspector = self.nixosConfigurations.inspector;
+            };
+          head-iso = import ./head/iso.nix;
         };
       };
     };

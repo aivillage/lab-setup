@@ -23,6 +23,7 @@
   pkgs,
   inputs,
   fenix,
+  inspector,
   ...
 }:
 let
@@ -35,60 +36,6 @@ let
     ;
 
   cfg = config.lab-setup.pxe;
-
-  mkInspectorBin =
-    { pkgs, system }:
-    let
-      rustToolchain = fenix.packages.${system}.stable.minimalToolchain;
-      rustPlatform = pkgs.makeRustPlatform {
-        cargo = rustToolchain;
-        rustc = rustToolchain;
-      };
-    in
-    rustPlatform.buildRustPackage {
-      pname = "inspector";
-      version = "0.1.0";
-      src = ./.;
-      cargoLock.lockFile = ./Cargo.lock;
-      buildInputs = [ pkgs.openssl ];
-      nativeBuildInputs = [
-        pkgs.pkg-config
-        pkgs.openssl
-        pkgs.cmake
-      ];
-      buildAndTestSubdir = "crates/inspector";
-      env.LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}";
-      cargoBuildFlags = [
-        "-p"
-        "inspector"
-      ];
-      doCheck = false;
-      postInstall = ''
-        wrapProgram $out/bin/inspector \
-          --prefix PATH : ${
-            pkgs.lib.makeBinPath [
-              pkgs.util-linux
-              pkgs.gptfdisk
-              pkgs.coreutils
-            ]
-          }
-      '';
-      meta.mainProgram = "inspector";
-    };
-
-  inspectorBin = mkInspectorBin {
-    pkgs = pkgs;
-    system = "x86_64-linux";
-  };
-
-  inspector = lib.nixosSystem {
-    system = "x86_64-linux";
-    specialArgs = { inherit inputs inspectorBin; };
-    modules = [
-      (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
-      ./inspector.nix
-    ];
-  };
 in
 {
   options.lab-setup.pxe = {
