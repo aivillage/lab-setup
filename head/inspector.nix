@@ -2,6 +2,7 @@
   pkgs,
   inputs,
   lib,
+  inspectorBin,
   ...
 }:
 {
@@ -14,7 +15,7 @@
   ];
 
   environment.systemPackages = with pkgs; [
-    inputs.self.packages.${pkgs.system}.inspector-bin
+    inspectorBin
 
     parted
     gptfdisk
@@ -64,14 +65,12 @@
     ];
 
     script = ''
-      ${
-        inputs.self.packages.${pkgs.system}.inspector-bin
-      }/bin/inspector inspect > /mnt/nas/inspector-report-$(hostname).yaml
+      ${inspectorBin}/bin/inspector inspect > /mnt/nas/inspector-report-$(hostname).yaml
 
       if [ -f /mnt/nas/WIPE_ALL ]; then
         TIMESTAMP=$(date +%s)
         LOGFILE="/mnt/nas/wipe-$(hostname)-$TIMESTAMP.log"
-        ${inputs.self.packages.${pkgs.system}.inspector-bin}/bin/inspector wipe --confirm > $LOGFILE
+        ${inspectorBin}/bin/inspector wipe --confirm > $LOGFILE
       fi
 
       sync
