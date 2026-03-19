@@ -14,7 +14,7 @@ let
     #!ipxe
     dhcp
     echo ${message}
-    kernel tftp://${ip}/default/vmlinuz
+    kernel tftp://${ip}/default/vmlinuz init=${inspector.toplevel}/init loglevel=4
     initrd tftp://${ip}/default/initrd
     boot
   '';
@@ -40,7 +40,7 @@ let
         machineBlocks = lib.concatMapStringsSep "\n" (m: ''
           :${m.name}
           echo Booting ${m.name}...
-          kernel tftp://${ip}/${m.name}/vmlinuz talos.platform=metal
+          kernel tftp://${ip}/${m.name}/vmlinuz talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1 module.sig_enforce=1
           initrd tftp://${ip}/${m.name}/initrd
           boot
         '') machines;
@@ -72,8 +72,8 @@ in
   "L+ /var/lib/tftpboot/undionly.kpxe - - - - ${pkgs.ipxe}/undionly.kpxe"
   "L+ /var/lib/tftpboot/boot.ipxe - - - - ${bootScript}"
   "d /var/lib/tftpboot/default 0755 root root -"
-  "L+ /var/lib/tftpboot/default/vmlinuz - - - - ${inspector}/vmlinuz"
-  "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector}/initrd"
+  "L+ /var/lib/tftpboot/default/vmlinuz - - - - ${inspector.kernel}/vmlinuz"
+  "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector.netbootRamdisk}/initrd"
 ]
 # Per-machine kernel + initrd directories
 ++ (lib.concatMap (m: [
