@@ -60,6 +60,12 @@ in
       description = "Domain name for dnsmasq";
     };
 
+    gateway = mkOption {
+      type = types.str;
+      default = "10.211.0.1";
+      description = "Gateway IP address";
+    };
+
     wipe = mkOption {
       type = types.bool;
       default = false;
