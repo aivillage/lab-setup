@@ -14,7 +14,7 @@ let
     #!ipxe
     dhcp
     echo ${message}
-    kernel tftp://${ip}/default/vmlinuz init=${inspector.toplevel}/init loglevel=4
+    kernel tftp://${ip}/default/bzImage init=${inspector.toplevel}/init loglevel=4
     initrd tftp://${ip}/default/initrd
     boot
   '';
@@ -61,7 +61,7 @@ let
 
         :default
           echo Booting default...
-          kernel tftp://${ip}/default/vmlinuz
+          kernel tftp://${ip}/default/bzImage
           initrd tftp://${ip}/default/initrd
           boot
       '';
@@ -72,7 +72,7 @@ in
   "L+ /var/lib/tftpboot/undionly.kpxe - - - - ${pkgs.ipxe}/undionly.kpxe"
   "L+ /var/lib/tftpboot/boot.ipxe - - - - ${bootScript}"
   "d /var/lib/tftpboot/default 0755 root root -"
-  "L+ /var/lib/tftpboot/default/vmlinuz - - - - ${inspector.kernel}/vmlinuz"
+  "L+ /var/lib/tftpboot/default/bzImage - - - - ${inspector.kernel}/bzImage"
   "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector.netbootRamdisk}/initrd"
 ]
 # Per-machine kernel + initrd directories
