@@ -1,3 +1,0 @@
-cluster:
-  controlPlane:
-    endpoint: https://control:6443
