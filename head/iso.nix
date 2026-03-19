@@ -30,5 +30,6 @@
     zfs # ZFS tools
     git # To clone this repo if needed
     neovim
+    nano
   ];
 }

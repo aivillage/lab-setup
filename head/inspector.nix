@@ -29,7 +29,6 @@
     lshw
     dmidecode
     htop
-    neofetch
   ];
 
   programs.nix-ld.enable = true;
