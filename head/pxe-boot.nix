@@ -72,8 +72,8 @@ in
   "L+ /var/lib/tftpboot/undionly.kpxe - - - - ${pkgs.ipxe}/undionly.kpxe"
   "L+ /var/lib/tftpboot/boot.ipxe - - - - ${bootScript}"
   "d /var/lib/tftpboot/default 0755 root root -"
-  "L+ /var/lib/tftpboot/default/vmlinuz - - - - default/${inspector.kernel}/vmlinuz"
-  "L+ /var/lib/tftpboot/default/initrd - - - - default/${inspector.netbootRamdisk}/initrd"
+  "L+ /var/lib/tftpboot/default/vmlinuz - - - - ${inspector.kernel}/vmlinuz"
+  "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector.netbootRamdisk}/initrd"
 ]
 # Per-machine kernel + initrd directories
 ++ (lib.concatMap (m: [
