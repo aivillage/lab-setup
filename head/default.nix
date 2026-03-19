@@ -66,6 +66,15 @@ in
       description = "Gateway IP address";
     };
 
+    nameservers = mkOption {
+      type = types.listOf types.str;
+      default = [
+        "1.1.1.1"
+        "8.8.8.8"
+      ];
+      description = "DNS server IP addresses";
+    };
+
     wipe = mkOption {
       type = types.bool;
       default = false;
