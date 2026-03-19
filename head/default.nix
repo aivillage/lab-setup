@@ -43,7 +43,6 @@ let
       ./inspector.nix
     ];
   };
-  machineType = types.submodule (import ../machine.nix { inherit lib; });
 in
 {
   options.lab-setup.pxe = {
@@ -55,15 +54,21 @@ in
       default = "10.211.0.10";
     };
 
+    wipe = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Wipe all machines before booting";
+    };
+
     mount-point = mkOption {
       type = types.path;
       description = "NFS mount point";
     };
 
     machines = mkOption {
-      type = types.listOf machineType;
+      type = types.attrsOf types.anything;
 
-      description = "Talos machines to PXE boot, each with image and boot mode";
+      description = "Talos machines to PXE boot, mapping names to machine objects";
     };
 
     # DHCP
@@ -130,7 +135,7 @@ in
         ];
 
         # Static hosts — derived from machine inventory
-        dhcp-host = (concatMap cfg.machines) ++ cfg.extraDhcpHosts;
+        dhcp-host = (concatMap (m: m.dhcpHosts) (lib.attrValues cfg.machines)) ++ cfg.extraDhcpHosts;
         address = [ "/nas/${cfg.ip}" ] ++ cfg.extraAddresses;
 
         # TFTP / PXE chainloading
@@ -166,8 +171,9 @@ in
       import ./pxe-boot.nix {
         inherit pkgs;
         ip = cfg.ip;
-        machines = cfg.machines;
+        machines = lib.attrValues cfg.machines;
         inspector = inspector;
+        wipe = cfg.wipe;
       }
       ++ [
         "z ${cfg.mount-point} 0777 nobody nogroup -"

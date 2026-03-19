@@ -172,5 +172,5 @@ let
 
 in
 {
-  inherit mkGeneratePatches mkMachineConfig mkMachinePatch;
+  inherit mkGeneratePatches mkMachineConfig;
 }

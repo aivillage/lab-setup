@@ -232,6 +232,65 @@
                     echo "OK: machine patch validated"
                     cp test-node.yaml $out
                   '';
+
+              testMachines = talos.machines {
+                control = {
+                  version = "v1.12.1";
+                  sha256 = "sha256-5IgKMWkDa4/VkEvD/x7Tr+YebilFJQCk/UoPL7WW1BE=";
+                  schematicSha256 = "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ=";
+                  controlPlane = true;
+                  network-interfaces = {
+                    enp1s0 = {
+                      ip = "10.0.0.1";
+                      mac = "aa:bb:cc:dd:ee:ff";
+                    };
+                  };
+                  diskSelector = {
+                    size = 512110190592;
+                  };
+                };
+                worker1 = {
+                  version = "v1.12.1";
+                  sha256 = "sha256-5IgKMWkDa4/VkEvD/x7Tr+YebilFJQCk/UoPL7WW1BE=";
+                  schematicSha256 = "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ=";
+                  controlPlane = false;
+                  nvidia = true;
+                  network-interfaces = {
+                    enp1s0 = {
+                      ip = "10.0.0.2";
+                      mac = "11:22:33:44:55:66";
+                    };
+                  };
+                  diskSelector = {
+                    size = 512110190592;
+                  };
+                };
+              };
+
+              machinesConfigCheck =
+                pkgs.runCommand "check-machines-config"
+                  {
+                    nativeBuildInputs = [ pkgs.yq-go ];
+                  }
+                  ''
+                    # 1. Execute the patch generator script
+                    ${generatePatches}/bin/generate-patches patches/
+
+                    # 2. Execute the machines config generator script
+                    ${testMachines.generateConfigs}/bin/generate-configs patches/
+
+                    echo "--- Control machine config ---"
+                    cat control.yaml | head -n 5
+                    echo "--- Worker1 machine config ---"
+                    cat worker1.yaml | head -n 5
+
+                    # 3. Use yq to test the generated files
+                    [[ $(yq e '.machine.network.hostname' control.yaml) == "control" ]]
+                    [[ $(yq e '.machine.network.hostname' worker1.yaml) == "worker1" ]]
+
+                    echo "OK: machines group config validated"
+                    touch $out
+                  '';
             in
             {
               talos-generate-patches = generatePatches;
@@ -239,6 +298,7 @@
               talos-image-structure = imageStructureCheck;
               talos-machine-image = testMachine.image;
               talos-machine-patch = machineConfigCheck;
+              talos-machines-config = machinesConfigCheck;
             };
 
         };

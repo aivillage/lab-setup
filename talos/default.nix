@@ -142,8 +142,32 @@ let
       primaryIp = builtins.head (lib.mapAttrsToList (_: iface: iface.ip) cfg.network-interfaces);
       configScript = configScript;
     };
+
+  machines =
+    machineAttrsSet:
+    let
+      evaluatedMachines = lib.mapAttrs (
+        name: attrs: machine (attrs // { inherit name; })
+      ) machineAttrsSet;
+
+      dhcpHosts = lib.concatLists (lib.mapAttrsToList (_name: m: m.dhcpHosts) evaluatedMachines);
+
+      generateConfigs = pkgs.writeShellScriptBin "generate-configs" ''
+        set -euo pipefail
+        PATCHES_DIR="''${1:?Usage: generate-configs <patches-dir> [secrets-file]}"
+        SECRETS_FILE="''${2:-}"
+
+        ${lib.concatMapStringsSep "\n" (m: ''
+          ${m.configScript}/bin/generate-config "$PATCHES_DIR" "$SECRETS_FILE"
+        '') (lib.attrValues evaluatedMachines)}
+      '';
+    in
+    {
+      machines = evaluatedMachines;
+      inherit dhcpHosts generateConfigs;
+    };
 in
 {
-  inherit machine;
+  inherit machine machines;
   inherit (configLib) mkGeneratePatches;
 }
