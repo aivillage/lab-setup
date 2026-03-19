@@ -122,10 +122,10 @@ let
       machinePatch = mkMachinePatch { inherit machine schematic; };
       outputType = if machine.controlPlane then "controlplane" else "worker";
     in
-    pkgs.writeShellScriptBin "generate-config-${machine.name}" ''
+    pkgs.writeShellScriptBin "generate-config" ''
       set -euo pipefail
 
-      PATCHES_DIR="''${1:?Usage: generate-config-${machine.name} <patches-dir> [secrets-file]}"
+      PATCHES_DIR="''${1:?Usage: generate-config <patches-dir> [secrets-file]}"
       SECRETS_FILE="''${2:-}"
 
       if [ ! -d "$PATCHES_DIR" ]; then
