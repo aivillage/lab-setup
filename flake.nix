@@ -63,18 +63,6 @@
           process-compose."default" = dev_shell.environment;
           devShells.default = dev_shell.shell;
 
-          packages = {
-            inspector-bin = mkInspectorBin { inherit pkgs system; };
-          }
-          // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-            nas-installer-iso =
-              (nixpkgs.lib.nixosSystem {
-                inherit system;
-                specialArgs = { inherit inputs; };
-                modules = [ ./head/iso.nix ];
-              }).config.system.build.images.iso-installer;
-          };
-
           checks =
             let
               talos = import ./talos/default.nix { inherit pkgs lib inputs; };
@@ -274,7 +262,12 @@
 
         nixosModules = {
           pxe = import ./head/default.nix;
-          head-iso = import ./head/iso.nix;
+          iso =
+            (nixpkgs.lib.nixosSystem {
+              inherit system;
+              specialArgs = { inherit inputs; };
+              modules = [ ./head/iso.nix ];
+            }).config.system.build.images.iso-installer;
         };
       };
     };
