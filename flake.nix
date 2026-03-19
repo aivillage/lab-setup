@@ -262,12 +262,7 @@
 
         nixosModules = {
           pxe = import ./head/default.nix;
-          iso =
-            (nixpkgs.lib.nixosSystem {
-              inherit system;
-              specialArgs = { inherit inputs; };
-              modules = [ ./head/iso.nix ];
-            }).config.system.build.images.iso-installer;
+          iso = import ./head/iso.nix;
         };
       };
     };
