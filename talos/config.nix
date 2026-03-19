@@ -44,7 +44,7 @@ let
           diskSelector:
             size: ${toString machine.diskSelector.size}
     '';
-
+  nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
   # ── Generate a patches directory ──────────────────────────────
   #
   # Accepts lab-specific parameters (NFS server, paths, model store)
@@ -61,7 +61,7 @@ let
     }:
     let
       ciliumPatch = import ./patches/cilium.nix { inherit pkgs kubelib; };
-      nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
+
       nfsPatch = import ./patches/nfs.nix {
         inherit pkgs kubelib;
         server = nfsServer;
@@ -117,7 +117,6 @@ let
       clusterEndpoint,
       talosVersion,
       schematic,
-      nvidiaKernelPatch ? null,
     }:
     let
       machinePatch = mkMachinePatch { inherit machine schematic; };
@@ -146,9 +145,9 @@ let
         PATCH_FLAGS="$PATCH_FLAGS --config-patch @$f"
       done
 
-      ${lib.optionalString (machine.nvidia && nvidiaKernelPatch != null) ''
+      ${lib.optionalString (machine.nvidia) ''
         # Nvidia kernel modules — per-machine, only for GPU nodes
-        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaKernelPatch}"
+        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.kernelModulesPatch}"
       ''}
 
       echo "Generating config for ${machine.name} (${outputType})..."

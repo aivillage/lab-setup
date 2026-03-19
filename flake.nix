@@ -141,7 +141,7 @@
                 diskSelector = {
                   size = 512110190592;
                 };
-                nvidia = false;
+                nvidia = true;
                 extraExtensions = [ ];
                 extraPatches = [ ];
               };
