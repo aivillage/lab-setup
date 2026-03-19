@@ -312,6 +312,11 @@
           {
             talos = import ./talos/default.nix { inherit pkgs lib inputs; };
           };
+
+        nixosModules = {
+          pxe = import ./head/default.nix;
+          head-iso = import ./head/iso.nix;
+        };
       };
     };
 }
