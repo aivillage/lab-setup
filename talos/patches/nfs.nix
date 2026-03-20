@@ -20,7 +20,7 @@ let
 
     storageClass = {
       name = "nfs-client";
-      defaultClass = false;
+      defaultClass = true;
       reclaimPolicy = "Retain";
     };
   };
