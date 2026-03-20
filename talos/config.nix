@@ -76,6 +76,10 @@ let
           file = nvidiaPatch.helmPatch;
         }
         {
+          name = "nvidia-runtime.yaml";
+          file = nvidiaPatch.runtimeClassPatch;
+        }
+        {
           name = "nfs.yaml";
           file = nfsPatch;
         }
@@ -83,6 +87,15 @@ let
           name = "model-store.yaml";
           file = modelStorePatch;
         }
+        {
+          name = "control.yaml";
+          file = ./patches/control.yaml;
+        }
+        {
+          name = "schedule.yaml";
+          file = ./patches/schedule.yaml;
+        }
+
       ]
       ++ extraPatches;
     in

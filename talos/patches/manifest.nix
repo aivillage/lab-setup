@@ -40,13 +40,6 @@ in
     modelPvcFile
     nvidia.helmPatch
     nvidia.runtimeClassPatch
-    ./control.yaml
-  ];
-  control = [
-    ./control/install.yaml
-  ];
-  worker = [
-    ./worker/install.yaml
   ];
 
   inherit nvidia;
