@@ -39,6 +39,7 @@ in
     mainPcvFile
     modelPvcFile
     nvidia.helmPatch
+    nvidia.runtimeClassPatch
     ./control.yaml
   ];
   control = [
