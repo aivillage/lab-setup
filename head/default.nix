@@ -150,7 +150,11 @@ in
 
         # Static hosts — derived from machine inventory
         dhcp-host = (concatMap (m: m.dhcpHosts) (lib.attrValues cfg.machines)) ++ cfg.extraDhcpHosts;
-        address = [ "/nas/${cfg.ip}" ] ++ cfg.extraAddresses;
+        address = [
+          "/nas/${cfg.ip}"
+          "/.aiv.local/10.211.0.50"
+        ]
+        ++ cfg.extraAddresses;
 
         # TFTP / PXE chainloading
         enable-tftp = true;
