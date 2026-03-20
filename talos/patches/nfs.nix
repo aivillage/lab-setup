@@ -37,7 +37,6 @@ let
   renderedNfsManifests = kubelib.buildHelmChart {
     name = "nfs-provisioner";
     chart = nfs_chart;
-    namespace = "kube-system";
     values = nfsProvisionerValues;
   };
 

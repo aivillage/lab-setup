@@ -37,7 +37,7 @@ let
     kind: PersistentVolumeClaim
     metadata:
       name: ${name}-pvc
-      namespace: kube-system
+      namespace: default
     spec:
       accessModes:
         - ReadOnlyMany

@@ -153,6 +153,7 @@ let
       ${lib.optionalString (machine.nvidia) ''
         # Nvidia kernel modules — per-machine, only for GPU nodes
         PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.kernelModulesPatch}"
+        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.containerdPatch}"
       ''}
 
       echo "Generating config for ${machine.name} (${outputType})..."

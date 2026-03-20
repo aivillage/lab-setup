@@ -16,6 +16,19 @@ let
         net.core.bpf_jit_harden: 1
   '';
 
+  containerdPatch = pkgs.writeText "nvidia-containerd.yaml" ''
+    - op: add
+      path: /machine/files
+      value:
+        - content: |
+            [plugins]
+              [plugins."io.containerd.cri.v1.runtime"]
+                [plugins."io.containerd.cri.v1.runtime".containerd]
+                  default_runtime_name = "nvidia"
+          path: /etc/cri/conf.d/20-customization.part
+          op: create
+  '';
+
   runtimeClassManifest = pkgs.writeText "nvidia-runtime-class.yaml" ''
     apiVersion: node.k8s.io/v1
     kind: RuntimeClass
@@ -96,5 +109,5 @@ in
   inherit helmPatch runtimeClassPatch;
 
   # Per-machine: kernel modules, only applied when machine.nvidia = true
-  inherit kernelModulesPatch;
+  inherit kernelModulesPatch containerdPatch;
 }
