@@ -47,8 +47,6 @@ let
     {
       nfsServer,
       nfsPath,
-      modelStoreName ? "model-store",
-      modelStorePath,
       extraPatches ? [ ],
     }:
     let
@@ -58,12 +56,6 @@ let
         inherit pkgs kubelib;
         server = nfsServer;
         path = nfsPath;
-      };
-      modelStorePatch = import ./patches/model-store.nix {
-        inherit pkgs kubelib;
-        server = nfsServer;
-        path = modelStorePath;
-        name = modelStoreName;
       };
 
       patches = [
