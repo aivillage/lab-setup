@@ -76,10 +76,6 @@ let
           file = nfsPatch;
         }
         {
-          name = "model-store.yaml";
-          file = modelStorePatch;
-        }
-        {
           name = "control.yaml";
           file = ./patches/control.yaml;
         }
