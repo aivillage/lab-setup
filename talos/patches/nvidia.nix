@@ -17,9 +17,8 @@ let
   '';
 
   containerdPatch = pkgs.writeText "nvidia-containerd.yaml" ''
-    - op: add
-      path: /machine/files
-      value:
+    machine:
+      files:
         - content: |
             [plugins]
               [plugins."io.containerd.cri.v1.runtime"]
