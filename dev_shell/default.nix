@@ -180,8 +180,8 @@ in
           memory = 8192;
           workers = 3;
           cpusWorkers = "4.0";
-          memoryWorkers = 12188;
-          disk = 24376;
+          memoryWorkers = 8192;
+          disk = 12188;
           # extra-disks = 2;
           # extra-disks-size = 8192;
           provisioner = "qemu";
