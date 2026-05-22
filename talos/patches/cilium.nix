@@ -53,7 +53,7 @@ let
 
     localRedirectPolicy = true;
 
-    l2Announcements = {
+    l2announcements = {
       enabled = true;
     };
 
@@ -106,7 +106,7 @@ let
     rules:
       - apiGroups: ["coordination.k8s.io"]
         resources: ["leases"]
-        verbs: ["get", "list", "watch", "create", "update", "patch"]
+        verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
     ---
     apiVersion: rbac.authorization.k8s.io/v1
     kind: RoleBinding

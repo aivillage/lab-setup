@@ -16,6 +16,39 @@ let
         net.core.bpf_jit_harden: 1
   '';
 
+  containerdPatch = pkgs.writeText "nvidia-containerd.yaml" ''
+    machine:
+      files:
+        - content: |
+            [plugins]
+              [plugins."io.containerd.cri.v1.runtime"]
+                [plugins."io.containerd.cri.v1.runtime".containerd]
+                  default_runtime_name = "nvidia"
+          path: /etc/cri/conf.d/20-customization.part
+          op: create
+  '';
+
+  runtimeClassManifest = pkgs.writeText "nvidia-runtime-class.yaml" ''
+    apiVersion: node.k8s.io/v1
+    kind: RuntimeClass
+    metadata:
+      name: nvidia
+    handler: nvidia
+  '';
+
+  runtimeClassPatch = pkgs.runCommand "nvidia-runtime-class-patch.yaml" { } ''
+    set -euo pipefail
+    (
+      cat << 'PATCH_START'
+    cluster:
+      inlineManifests:
+        - name: nvidia-runtime-class
+          contents: |
+    PATCH_START
+      sed 's/^/        /' "${runtimeClassManifest}"
+    ) > "$out"
+  '';
+
   # ── Device plugin helm chart (cluster-wide) ───────────────────
   devicePluginValues = {
     gfd = {
@@ -72,8 +105,8 @@ let
 in
 {
   # Cluster-wide: the device plugin inline manifest
-  inherit helmPatch;
+  inherit helmPatch runtimeClassPatch;
 
   # Per-machine: kernel modules, only applied when machine.nvidia = true
-  inherit kernelModulesPatch;
+  inherit kernelModulesPatch containerdPatch;
 }

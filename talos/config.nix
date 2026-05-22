@@ -20,29 +20,23 @@ let
 
   # ── Per-machine patch: hostname + network + install ───────────
   mkMachinePatch =
-    machine:
+    { machine, schematic }:
     let
-      networkYaml = lib.concatMapStringsSep "\n" (
-        dev:
-        let
-          iface = machine.network-interfaces.${dev};
-        in
-        "      - interface: ${dev}\n        dhcp: false\n        addresses:\n          - ${iface.ip}/24"
-      ) (lib.attrNames machine.network-interfaces);
+      installerImage = "factory.talos.dev/installer/${builtins.readFile schematic}:${machine.version}";
     in
     pkgs.writeText "${machine.name}-machine-patch.yaml" ''
       machine:
         network:
           hostname: ${machine.name}
           interfaces:
-      ${networkYaml}
         install:
+          image: ${installerImage}
           disk: null
           wipe: true
           diskSelector:
             size: ${toString machine.diskSelector.size}
     '';
-
+  nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
   # ── Generate a patches directory ──────────────────────────────
   #
   # Accepts lab-specific parameters (NFS server, paths, model store)
@@ -53,31 +47,45 @@ let
     {
       nfsServer,
       nfsPath,
-      modelStoreName ? "model-store",
-      modelStorePath,
       extraPatches ? [ ],
     }:
     let
       ciliumPatch = import ./patches/cilium.nix { inherit pkgs kubelib; };
-      nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
+
       nfsPatch = import ./patches/nfs.nix {
         inherit pkgs kubelib;
         server = nfsServer;
         path = nfsPath;
       };
-      modelStorePatch = import ./patches/model-store.nix {
-        inherit pkgs kubelib;
-        server = nfsServer;
-        path = modelStorePath;
-        name = modelStoreName;
-      };
 
       patches = [
-        { name = "cilium.yaml"; file = ciliumPatch; }
-        { name = "nvidia-helm.yaml"; file = nvidiaPatch.helmPatch; }
-        { name = "nfs.yaml"; file = nfsPatch; }
-        { name = "model-store.yaml"; file = modelStorePatch; }
-      ] ++ extraPatches;
+        {
+          name = "cilium.yaml";
+          file = ciliumPatch;
+        }
+        {
+          name = "nvidia-helm.yaml";
+          file = nvidiaPatch.helmPatch;
+        }
+        {
+          name = "nvidia-runtime.yaml";
+          file = nvidiaPatch.runtimeClassPatch;
+        }
+        {
+          name = "nfs.yaml";
+          file = nfsPatch;
+        }
+        {
+          name = "control.yaml";
+          file = ./patches/control.yaml;
+        }
+        {
+          name = "schedule.yaml";
+          file = ./patches/schedule.yaml;
+        }
+
+      ]
+      ++ extraPatches;
     in
     pkgs.writeShellScriptBin "generate-patches" ''
       set -euo pipefail
@@ -101,16 +109,16 @@ let
       clusterName,
       clusterEndpoint,
       talosVersion,
-      nvidiaKernelPatch ? null,
+      schematic,
     }:
     let
-      machinePatch = mkMachinePatch machine;
+      machinePatch = mkMachinePatch { inherit machine schematic; };
       outputType = if machine.controlPlane then "controlplane" else "worker";
     in
-    pkgs.writeShellScriptBin "generate-config-${machine.name}" ''
+    pkgs.writeShellScriptBin "generate-config" ''
       set -euo pipefail
 
-      PATCHES_DIR="''${1:?Usage: generate-config-${machine.name} <patches-dir> [secrets-file]}"
+      PATCHES_DIR="''${1:?Usage: generate-config <patches-dir> [secrets-file]}"
       SECRETS_FILE="''${2:-}"
 
       if [ ! -d "$PATCHES_DIR" ]; then
@@ -130,9 +138,10 @@ let
         PATCH_FLAGS="$PATCH_FLAGS --config-patch @$f"
       done
 
-      ${lib.optionalString (machine.nvidia && nvidiaKernelPatch != null) ''
+      ${lib.optionalString (machine.nvidia) ''
         # Nvidia kernel modules — per-machine, only for GPU nodes
-        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaKernelPatch}"
+        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.kernelModulesPatch}"
+        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.containerdPatch}"
       ''}
 
       echo "Generating config for ${machine.name} (${outputType})..."
@@ -147,6 +156,8 @@ let
         --config-patch @${machinePatch} \
         ${lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches} \
         $SECRETS_FLAG \
+        --with-docs=false \
+        --with-examples=false \
         --force
 
       chmod 644 "${machine.name}.yaml"
@@ -155,5 +166,5 @@ let
 
 in
 {
-  inherit mkGeneratePatches mkMachineConfig mkMachinePatch;
+  inherit mkGeneratePatches mkMachineConfig;
 }

@@ -21,12 +21,6 @@ let
     server = nfsServer;
     path = mainPath;
   };
-  modelPvcFile = import ./model-store.nix {
-    inherit pkgs kubelib;
-    server = nfsServer;
-    path = vllmPath;
-    name = "model-store";
-  };
   nvidia = import ./nvidia.nix {
     inherit pkgs kubelib;
   };
@@ -39,13 +33,7 @@ in
     mainPcvFile
     modelPvcFile
     nvidia.helmPatch
-    ./control.yaml
-  ];
-  control = [
-    ./control/install.yaml
-  ];
-  worker = [
-    ./worker/install.yaml
+    nvidia.runtimeClassPatch
   ];
 
   inherit nvidia;

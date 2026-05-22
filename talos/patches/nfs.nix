@@ -20,7 +20,7 @@ let
 
     storageClass = {
       name = "nfs-client";
-      defaultClass = false;
+      defaultClass = true;
       reclaimPolicy = "Retain";
     };
   };
@@ -37,7 +37,6 @@ let
   renderedNfsManifests = kubelib.buildHelmChart {
     name = "nfs-provisioner";
     chart = nfs_chart;
-    namespace = "kube-system";
     values = nfsProvisionerValues;
   };
 

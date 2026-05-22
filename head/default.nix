@@ -22,6 +22,8 @@
   lib,
   pkgs,
   inputs,
+  fenix,
+  inspector,
   ...
 }:
 let
@@ -34,16 +36,6 @@ let
     ;
 
   cfg = config.lab-setup.pxe;
-
-  inspector = lib.nixosSystem {
-    system = "x86_64-linux";
-    specialArgs = { inherit inputs; };
-    modules = [
-      (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
-      ./inspector.nix
-    ];
-  };
-  machineType = types.submodule (import ../machine.nix { inherit lib; });
 in
 {
   options.lab-setup.pxe = {
@@ -55,15 +47,42 @@ in
       default = "10.211.0.10";
     };
 
+    domain = mkOption {
+      type = types.str;
+      default = "aicl.local";
+      description = "Domain name for dnsmasq";
+    };
+
+    gateway = mkOption {
+      type = types.str;
+      default = "10.211.0.1";
+      description = "Gateway IP address";
+    };
+
+    nameservers = mkOption {
+      type = types.listOf types.str;
+      default = [
+        "1.1.1.1"
+        "8.8.8.8"
+      ];
+      description = "DNS server IP addresses";
+    };
+
+    wipe = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Wipe all machines before booting";
+    };
+
     mount-point = mkOption {
       type = types.path;
       description = "NFS mount point";
     };
 
     machines = mkOption {
-      type = types.listOf machineType;
+      type = types.attrsOf types.anything;
 
-      description = "Talos machines to PXE boot, each with image and boot mode";
+      description = "Talos machines to PXE boot, mapping names to machine objects";
     };
 
     # DHCP
@@ -130,8 +149,12 @@ in
         ];
 
         # Static hosts — derived from machine inventory
-        dhcp-host = (concatMap cfg.machines) ++ cfg.extraDhcpHosts;
-        address = [ "/nas/${cfg.ip}" ] ++ cfg.extraAddresses;
+        dhcp-host = (concatMap (m: m.dhcpHosts) (lib.attrValues cfg.machines)) ++ cfg.extraDhcpHosts;
+        address = [
+          "/nas/${cfg.ip}"
+          "/.aiv.local/10.211.0.50"
+        ]
+        ++ cfg.extraAddresses;
 
         # TFTP / PXE chainloading
         enable-tftp = true;
@@ -153,11 +176,17 @@ in
 
     # ── Firewall: open DHCP + DNS + TFTP ────────────────────────
     networking.firewall = {
-      allowedTCPPorts = [ 53 ];
+      allowedTCPPorts = [
+        53
+        111
+        2049
+      ];
       allowedUDPPorts = [
         53
         67
         69
+        111
+        2049
       ];
     };
 
@@ -166,8 +195,9 @@ in
       import ./pxe-boot.nix {
         inherit pkgs;
         ip = cfg.ip;
-        machines = cfg.machines;
-        inspector = inspector;
+        machines = lib.attrValues cfg.machines;
+        inspector = inspector.config.system.build;
+        wipe = cfg.wipe;
       }
       ++ [
         "z ${cfg.mount-point} 0777 nobody nogroup -"
