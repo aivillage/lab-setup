@@ -1,100 +1,45 @@
-{
-  pkgs,
-  kubelib,
-}:
+{ pkgs, kubelib, ... }:
+
 let
+  cilium_chart = kubelib.downloadHelmChart {
+    repo = "https://helm.cilium.io/";
+    chart = "cilium";
+    version = "1.19.4";
+    chartHash = "sha256-u4FPk5HpTGHUiRMObVrK7v9FaLQSXGNGsCZcqVZ27iw="; # Ensure this is your updated hash
+  };
+
   ciliumValues = {
-    ipam = {
-      mode = "kubernetes";
-    };
-
+    ipam.mode = "kubernetes";
     kubeProxyReplacement = true;
-
-    securityContext = {
-      capabilities = {
-        ciliumAgent = [
-          "CHOWN"
-          "KILL"
-          "NET_ADMIN"
-          "NET_RAW"
-          "IPC_LOCK"
-          "SYS_ADMIN"
-          "SYS_RESOURCE"
-          "DAC_OVERRIDE"
-          "FOWNER"
-          "SETGID"
-          "SETUID"
-        ];
-        cleanCiliumState = [
-          "NET_ADMIN"
-          "SYS_ADMIN"
-          "SYS_RESOURCE"
-        ];
-      };
-    };
-
-    cgroup = {
-      autoMount.enabled = false;
-      hostRoot = "/sys/fs/cgroup";
-    };
-
     k8sServiceHost = "localhost";
     k8sServicePort = 7445;
+    securityContext.capabilities.ciliumAgent = [
+      "CHOWN"
+      "KILL"
+      "NET_ADMIN"
+      "NET_RAW"
+      "IPC_LOCK"
+      "SYS_ADMIN"
+      "SYS_RESOURCE"
+      "DAC_OVERRIDE"
+      "FOWNER"
+      "SETGID"
+      "SETUID"
+    ];
+    securityContext.capabilities.cleanCiliumState = [
+      "NET_ADMIN"
+      "SYS_ADMIN"
+      "SYS_RESOURCE"
+    ];
+    cgroup.autoMount.enabled = false;
+    cgroup.hostRoot = "/sys/fs/cgroup";
+  };
 
-    dnsproxy = {
-      enabled = true;
-    };
-
-    hubble = {
-      enabled = true;
-      relay.enabled = true;
-      ui.enabled = true;
-    };
-
-    localRedirectPolicy = true;
-
-    l2announcements = {
-      enabled = true;
-    };
-
-    ingressController = {
-      enabled = true;
-      default = true;
-      loadbalancerMode = "shared";
-      service = {
-        loadBalancerIP = "10.211.0.50";
-      };
-    };
-
-    tunnelProtocol = "vxlan";
-
-    cni = {
-      chainingMode = "none";
-      exclusive = true;
-    };
-
-    gatewayAPI = {
-      enabled = true;
-      enableAlpn = true;
-      enableAppProtocol = true;
-    };
-
-    hostPort = {
-      enabled = true;
-    };
-
-    nodePort = {
-      enabled = true;
-    };
-
-    externalIPs = {
-      enabled = true;
-    };
-
-    loadBalancer = {
-      mode = "snat";
-      serviceTopology = true;
-    };
+  ciliumManifests = kubelib.buildHelmChart {
+    name = "cilium";
+    namespace = "kube-system";
+    chart = cilium_chart;
+    values = ciliumValues;
   };
 
   l2Resources = ''
@@ -120,49 +65,21 @@ let
     subjects:
       - kind: ServiceAccount
         name: cilium
-        namespace: kube-system  
+        namespace: kube-system
   '';
 
-  cilium_chart = kubelib.downloadHelmChart {
-    repo = "https://helm.cilium.io/";
-    chart = "cilium";
-    version = "v1.18.3";
-    chartHash = "sha256-f+3s8+EmXiiqJ5p4dUtpQHWGTYflrO6L9Nj1zMMgh6w=";
-  };
-
-  renderedCiliumManifests = kubelib.buildHelmChart {
-    name = "cilium";
-    chart = cilium_chart;
-    namespace = "kube-system";
-    values = ciliumValues;
-    includeCRDs = true;
-  };
-
 in
-pkgs.runCommand "cilium.yaml" { } ''
-      set -euo pipefail
-      
-      (
-        cat << 'PATCH_START'
-  cluster:
-    network:
-      cni:
-        name: none
-    proxy:
-      disabled: true
-    inlineManifests:
-      - name: cilium
-        contents: |
-  PATCH_START
-      
-        sed 's/^/        /' "${renderedCiliumManifests}"
+pkgs.runCommand "talos-cilium-patch.yaml"
+  {
+    inherit l2Resources;
+  }
+  ''
+    # 1. Output the raw rendered Helm chart manifests directly
+    cat ${ciliumManifests} > $out
 
-        cat << 'L2_START'
-      - name: cilium-l2
-        contents: |
-  L2_START
+    # 2. Add a YAML document separator to ensure safe parsing
+    echo -e "\n---\n" >> $out
 
-        echo "${l2Resources}" | sed 's/^/        /'
-        
-      ) > "$out"
-''
+    # 3. Append the raw L2 RBAC resources (no indentation needed)
+    echo "$l2Resources" >> $out
+  ''

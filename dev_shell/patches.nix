@@ -13,6 +13,21 @@
 let
   inherit (lib) types mkOption mkIf;
 
+  aivLabSettings = (import ./settings.nix { inherit pkgs; }).aiv-lab;
+
+  bootstrapPatch = import ../talos/patches/bootstrap.nix {
+    inherit pkgs;
+    manifests = [
+      "cilium"
+    ];
+    host = "http://${aivLabSettings.host}:${builtins.toString aivLabSettings.webserver.port}";
+  };
+
+  traefik = import ../talos/patches/traefik.nix {
+    inherit pkgs;
+    kubelib = config.kubelib;
+  };
+
   # Import con_shell patch generators
   cilium_patch = import ../talos/patches/cilium.nix {
     inherit pkgs;
@@ -30,9 +45,12 @@ let
       set -euo pipefail
 
       echo "🔧 Generating development patches..."
-      mkdir -p "${config.dataDir}"
-      cp -f "${cilium_patch}" "${config.dataDir}/cilium.yaml"
-      cp -f "${ghcr_patch}" "${config.dataDir}/ghcr.yaml"
+      mkdir -p "${aivLabSettings.patches.storagePath}"
+      cp -f "${bootstrapPatch}" "${aivLabSettings.patches.storagePath}/bootstrap.yaml"
+      cp -f "${cilium_patch}" "${aivLabSettings.patches.storagePath}/cilium.yaml"
+      cp -f "${ghcr_patch}" "${aivLabSettings.patches.storagePath}/ghcr.yaml"
+      cp -f "${traefik}" "${aivLabSettings.patches.storagePath}/traefik.yaml"
+      echo "Development patches created"
     '';
   };
 

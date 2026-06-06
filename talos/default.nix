@@ -31,7 +31,7 @@ let
     options = {
       version = mkOption {
         type = types.str;
-        default = "v1.12.1";
+        default = "v1.13.3";
       };
       sha256 = mkOption { type = types.str; };
       schematicSha256 = mkOption { type = types.str; };

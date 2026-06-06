@@ -1,8 +1,8 @@
 {
-  pkgs,
-  lib,
   config,
+  lib,
   name,
+  pkgs,
   ...
 }:
 let
@@ -13,14 +13,16 @@ let
     mkIf
     ;
 
+  aivLabSettings = (import ./settings.nix { inherit pkgs; }).aiv-lab;
+
   KUBECONFIG = config.dataDir + "/kubeconfig";
   TALOSCONFIG = config.dataDir + "/talosconfig";
   patch_file = config.dataDir + "/dynamic-patch.yaml";
 
   talosHashes = {
-    "v1.11.0" = {
-      kernelSha256 = "sha256-ymVDU/M58csSm6LVW3TGz/fERlzYxThsAfNzWqjJ6Qg=";
-      initramfsSha256 = "sha256-S1DYzm00Lb8BlWr3/S5LK7E/XbUUPDDCgDhKcR8ocW8=";
+    "v1.13.3" = {
+      kernelSha256 = "sha256-w21KrDbQga+AFv+YdPKRFb8Uk9I+VWuZ01UxavoOmP8=";
+      initramfsSha256 = "sha256-fCxTlvb1Gupt9QoPlI+mhA4vaYteC9fLJl3y0wGLP0k=";
     };
   };
 
@@ -51,79 +53,91 @@ let
     ++ (lib.optional (config.dynamicPatch != null) "${config.dataDir}/dynamic-patch.yaml");
 
   startCommandArgs =
-    (lib.optionals config.useSudo [
-      "sudo"
-      "-E"
-    ])
-    ++ [
-      (lib.getExe config.package)
-      "cluster"
-      "create"
-      "--name"
-      (lib.escapeShellArg config.clusterName)
-      "--state"
-      (lib.escapeShellArg config.dataDir)
-      "--provisioner"
-      (lib.escapeShellArg config.provisioner)
-      "--talosconfig"
-      (lib.escapeShellArg TALOSCONFIG)
-      "--workers"
-      (lib.escapeShellArg (toString config.workers))
-      "--controlplanes"
-      (lib.escapeShellArg (toString config.controlplanes))
-      "--cpus"
-      (lib.escapeShellArg config.cpus)
-      "--cpus-workers"
-      (lib.escapeShellArg config.cpusWorkers)
-      "--memory"
-      (lib.escapeShellArg (toString config.memory))
-      "--memory-workers"
-      (lib.escapeShellArg (toString config.memoryWorkers))
-    ]
-    ++ (lib.concatMap (patchFile: [
-      "--config-patch"
-      "@${(lib.escapeShellArg patchFile)}"
-    ]) allPatchFiles)
-    ++ (lib.optionals (config.cidr != null) [
-      "--cidr"
-      (lib.escapeShellArg config.cidr)
-    ])
-    ++ (lib.optional config.withDebug "--with-debug")
-    ++ (lib.optional config.withKubespan "--with-kubespan")
-    ++ (lib.optional config.withClusterDiscovery "--with-cluster-discovery")
-    ++ (lib.concatMap (mirror: [
-      "--registry-mirror"
-      mirror
-    ]) config.registryMirrors)
-    # QEMU-specific options
-    ++ (lib.optionals (config.provisioner == "qemu") (
-      [
-        "--extra-disks"
-        (lib.escapeShellArg config.extra-disks)
-        "--extra-disks-size"
-        (lib.escapeShellArg config.extra-disks-size)
-        "--extra-disks-drivers"
-        (lib.escapeShellArg config.extra-disks-drivers)
-        "--disk"
-        (lib.escapeShellArg config.disk)
-        "--initrd-path"
-        (lib.escapeShellArg talosInitramfs)
-        "--vmlinuz-path"
-        (lib.escapeShellArg talosKernel)
-      ]
-      ++ (lib.optional config.withUefi "--with-uefi")
-    ))
-    # Docker-specific options
-    ++ (lib.optionals (config.provisioner == "docker") (
-      (lib.optional (config.image != null) [
-        "--image"
-        (lib.escapeShellArg config.image)
-      ])
-      ++ (lib.optional (config.exposedPorts != null) [
-        "--exposed-ports"
-        (lib.escapeShellArg config.exposedPorts)
-      ])
-    ));
+    let
+      arg = lib.escapeShellArg;
+      argStr = x: lib.escapeShellArg (toString x);
+
+      baseArgs =
+        lib.optionals config.qemu.useSudo [
+          "sudo"
+          "-E"
+        ]
+        ++ [
+          (lib.getExe config.package)
+          "cluster"
+          "create"
+          (arg config.provisioner)
+          "--name"
+          (arg config.clusterName)
+          "--state"
+          (arg "${aivLabSettings.talos.storagePath}")
+          "--talosconfig-destination"
+          (arg TALOSCONFIG)
+          "--workers"
+          (argStr config.workers.count)
+          "--cpus-workers"
+          (arg config.workers.cpus)
+          "--memory-workers"
+          (argStr config.workers.memory)
+          "--config-patch"
+          (arg "@${aivLabSettings.patches.storagePath}/bootstrap.yaml")
+        ]
+        ++ lib.optional config.withDebug "--with-debug"
+        ++ lib.optional config.withKubespan "--with-kubespan"
+        ++ lib.concatMap (mirror: [
+          "--registry-mirror"
+          mirror
+        ]) config.registryMirrors;
+
+      dockerArgs = lib.optionals (config.provisioner == "docker") (
+        lib.optionals (config.docker.image != null) [
+          "--image"
+          (arg config.docker.image)
+        ]
+        ++ lib.optionals (config.docker.exposedPorts != null) [
+          "--exposed-ports"
+          (arg config.docker.exposedPorts)
+        ]
+      );
+
+      qemuArgs =
+        let
+          primaryDisk = "virtio:${toString config.qemu.disk}MB";
+          extraDisks = lib.genList (
+            i: "${config.qemu.extra-disks-drivers}:${toString config.qemu.extra-disks-size}MB"
+          ) config.qemu.extra-disks;
+          allDisks = [ primaryDisk ] ++ extraDisks;
+        in
+        lib.optionals (config.provisioner == "qemu") (
+          [
+            "--presets"
+            (arg config.qemu.presets)
+            "--disks"
+            (arg (lib.concatStringsSep "," allDisks))
+            "--initrd-path"
+            (arg talosInitramfs)
+            "--vmlinuz-path"
+            (arg talosKernel)
+            # extra search paths for nixos ovmf images
+            "extra-uefi-search-paths"
+            "/run/libvirt/nix-ovmf"
+          ]
+          ++ lib.optionals (config.qemu.cidr != null) [
+            "--cidr"
+            (arg config.qemu.cidr)
+          ]
+          ++ lib.optionals (config.qemu.controlplanes != null) [
+            "--controlplanes"
+            (argStr config.qemu.controlplanes.count)
+            "--cpus-controlplanes"
+            (argStr config.qemu.controlplanes.cpus)
+            "--memory-controlplanes"
+            (argStr config.qemu.controlplanes.memory)
+          ]
+        );
+
+    in
+    baseArgs ++ dockerArgs ++ qemuArgs;
 
   # Setup script that prepares directories and configuration
   setupScript = pkgs.writeShellApplication {
@@ -162,7 +176,7 @@ let
       ${(lib.concatStringsSep " " startCommandArgs)}
 
       # Fix permissions if running with sudo
-      ${lib.optionalString config.useSudo ''
+      ${lib.optionalString config.qemu.useSudo ''
         if [ -f "${TALOSCONFIG}" ]; then
           sudo chown "$USER":"$USER" "${TALOSCONFIG}"
         fi
@@ -188,11 +202,13 @@ let
     ${lib.optionalString (config.preStopHook != null) config.preStopHook}
 
     if [ -d "${config.dataDir}" ]; then
-      CMD="${if config.useSudo then "sudo -E " else ""}${lib.getExe config.package} cluster destroy"
+      CMD="${
+        if config.qemu.useSudo then "sudo -E " else ""
+      }${lib.getExe config.package} cluster destroy"
       CMD="$CMD --name ${config.clusterName}"
       CMD="$CMD --state ${config.dataDir}"
       CMD="$CMD --provisioner ${config.provisioner}"
-      
+
       echo "Executing: $CMD"
       eval "$CMD" 2>/dev/null || {
         echo "Warning: Failed to destroy cluster normally, attempting force cleanup..."
@@ -233,6 +249,12 @@ in
   options = {
     package = mkPackageOption pkgs "talosctl" { };
 
+    talosVersion = mkOption {
+      type = types.str;
+      default = "v1.13.3";
+      description = "Talos version to use.";
+    };
+
     clusterName = mkOption {
       type = types.str;
       default = "talos-local";
@@ -248,83 +270,22 @@ in
       description = "Provisioner to use for the cluster.";
     };
 
-    talosVersion = mkOption {
-      type = types.str;
-      default = "v1.11.0";
-      description = "Talos version to use.";
-    };
-
-    workers = mkOption {
-      type = types.int;
-      default = 1;
-      description = "Number of worker nodes.";
-    };
-
-    controlplanes = mkOption {
-      type = types.int;
-      default = 1;
-      description = "Number of control plane nodes.";
-    };
-
-    cpus = mkOption {
-      type = types.str;
-      default = 2.0;
-      description = "CPU allocation for control plane nodes.";
-    };
-
-    cpusWorkers = mkOption {
-      type = types.str;
-      default = "2.0";
-      description = "CPU allocation for worker nodes.";
-    };
-
-    memory = mkOption {
-      type = types.int;
-      default = 2048;
-      description = "Memory allocation in MB for control plane nodes.";
-    };
-
-    memoryWorkers = mkOption {
-      type = types.int;
-      default = 2048;
-      description = "Memory allocation in MB for worker nodes.";
-    };
-
-    disk = mkOption {
-      type = types.int;
-      default = 6144;
-      description = "Disk size in MB for each node.";
-    };
-
-    extra-disks = mkOption {
-      type = types.int;
-      default = 0;
-      description = "Disk size in MB for each node.";
-    };
-
-    extra-disks-size = mkOption {
-      type = types.int;
-      default = 5120;
-      description = "Disk size in MB for each node.";
-    };
-
-    extra-disks-drivers = mkOption {
-      type = types.enum [
-        "virtio"
-        "ide"
-        "ahci"
-        "scsi"
-        "nvme"
-        "megaraid"
-      ];
-      default = "nvme";
-      description = "Disk size in MB for each node.";
-    };
-
-    cidr = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      description = "CIDR of the cluster network.";
+    workers = {
+      count = mkOption {
+        type = types.int;
+        default = 1;
+        description = "Number of worker nodes.";
+      };
+      cpus = mkOption {
+        type = types.str;
+        default = "2.0";
+        description = "CPU allocation for worker nodes.";
+      };
+      memory = mkOption {
+        type = types.str;
+        default = "2Gib";
+        description = "Memory allocation in MB for worker nodes.";
+      };
     };
 
     bootTimeout = mkOption {
@@ -357,18 +318,6 @@ in
       description = "Enable KubeSpan.";
     };
 
-    withClusterDiscovery = mkOption {
-      type = types.bool;
-      default = true;
-      description = "Enable cluster discovery.";
-    };
-
-    withUefi = mkOption {
-      type = types.bool;
-      default = true;
-      description = "Enable UEFI for QEMU provisioner.";
-    };
-
     registryMirrors = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -398,28 +347,101 @@ in
       '';
     };
 
-    image = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      description = "Docker image to use (docker provisioner only).";
+    docker = {
+      image = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Docker image to use (docker provisioner only).";
+      };
+      exposedPorts = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = ''
+          comma-separated list of ports/protocols to expose on init node.
+          "80:80/tcp,443:443/tcp"
+        '';
+      };
     };
 
-    exposedPorts = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      description = "Ports to expose (docker provisioner only).";
+    qemu = {
+      useSudo = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Use sudo for talosctl commands.";
+      };
+      presets = mkOption {
+        type = types.listOf (
+          types.enum [
+            "iso"
+            "pxe"
+            "iso-secureboot"
+          ]
+        );
+        default = [ "iso" ];
+        description = ''
+          talosctl cluster create qemu --help
+            Available presets:
+              - iso: Configure Talos to boot from an ISO from the Image Factory.
+              - iso-secureboot: Configure Talos for Secureboot via ISO. Only available on Linux hosts.
+              - pxe: Configure Talos to boot via PXE from the Image Factory.
+            Note: exactly one of 'iso', 'iso-secureboot', 'pxe' or 'disk-image' presets must be specified.
+        '';
+      };
+      controlplanes = {
+        count = mkOption {
+          type = types.int;
+          default = 1;
+          description = "Number of worker nodes.";
+        };
+        cpus = mkOption {
+          type = types.str;
+          default = "2.0";
+          description = "CPU allocation for worker nodes.";
+        };
+        memory = mkOption {
+          type = types.str;
+          default = "2Gib";
+          description = "Memory allocation in MB for worker nodes.";
+        };
+      };
+      cidr = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "CIDR of the cluster network.";
+      };
+      disk = mkOption {
+        type = types.int;
+        default = 6144;
+        description = "Disk size in MB for each node.";
+      };
+      extra-disks = mkOption {
+        type = types.int;
+        default = 0;
+        description = "Disk size in MB for each node.";
+      };
+      extra-disks-size = mkOption {
+        type = types.int;
+        default = 5120;
+        description = "Disk size in MB for each node.";
+      };
+      extra-disks-drivers = mkOption {
+        type = types.enum [
+          "virtio"
+          "ide"
+          "ahci"
+          "scsi"
+          "nvme"
+          "megaraid"
+        ];
+        default = "nvme";
+        description = "Disk size in MB for each node.";
+      };
     };
 
     useLocalRegistries = mkOption {
       type = types.bool;
       default = true;
       description = "Set up local registry mirrors for QEMU provisioner.";
-    };
-
-    useSudo = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Use sudo for talosctl commands.";
     };
 
     checkKubectl = mkOption {
