@@ -9,16 +9,13 @@ let
     types
     mkEnableOption
     mkOption
-    mkIf
     escapeShellArgs
     optionalAttrs
     ;
 
   # 'config' here automatically represents services.containers.<instance-name>
   cfg = config;
-
-  # Import global settings directly to bypass module boundaries
-  aivLabSettings = (import ./settings.nix { inherit pkgs; }).aiv-lab;
+  host = if pkgs.stdenv.isDarwin then "host.docker.internal" else "10.5.0.1";
 
   providerSubModule =
     { name, ... }:
@@ -27,7 +24,7 @@ let
         remoteUrl = lib.mkOption { type = lib.types.str; };
         dataDir = lib.mkOption {
           type = lib.types.str;
-          default = "${aivLabSettings.registries.storagePath}/${name}";
+          default = "${cfg.dataDir}/registries/${name}";
           description = "Local path for registry storage.";
         };
         localPort = lib.mkOption {
@@ -47,8 +44,14 @@ in
     registries = {
       enable = lib.mkEnableOption "local Docker registry mirrors";
 
-      providers = lib.mkOption {
-        type = lib.types.attrsOf (lib.types.submodule providerSubModule);
+      host = mkOption {
+        type = types.str;
+        default = host;
+        description = "Docker on Macos runs in VM and uses host.docker.internal, else use cidr gateway for cluster.";
+      };
+
+      providers = mkOption {
+        type = types.attrsOf (types.submodule providerSubModule);
         default = { };
         description = "Attribute set of specific registry mirror providers (e.g., dockerhub, ghcr).";
       };
@@ -57,18 +60,32 @@ in
     webserver = {
       enable = mkEnableOption "nginx webserver";
 
+      patchesDir = lib.mkOption {
+        type = types.str;
+        default = "";
+        description = "Local path for bind mount";
+      };
+
+      host = mkOption {
+        type = types.str;
+        default = host;
+        description = "Docker on Macos runs in VM and uses host.docker.internal, else use cidr gateway for cluster.";
+      };
+
       containerName = mkOption {
         type = types.str;
         default = "webserver-talos-patches";
       };
+
       localPort = mkOption {
         type = types.int;
-        default = aivLabSettings.webserver.port;
+        default = 5555;
       };
+
       bindMounts = mkOption {
         type = types.listOf types.str;
         default = [
-          "${aivLabSettings.webserver.storagePath}:/usr/share/nginx/html:ro"
+          "${cfg.webserver.patchesDir}:/usr/share/nginx/html:ro"
         ];
         description = "A list of Docker volume bind mounts (e.g., '/host:/container:ro').";
       };

@@ -14,6 +14,7 @@ let
     ;
 
   aivLabSettings = (import ./settings.nix { inherit pkgs; }).aiv-lab;
+  cfg = config;
 
   KUBECONFIG = config.dataDir + "/kubeconfig";
   TALOSCONFIG = config.dataDir + "/talosconfig";
@@ -70,7 +71,7 @@ let
           "--name"
           (arg config.clusterName)
           "--state"
-          (arg "${aivLabSettings.talos.storagePath}")
+          (arg "${cfg.dataDir}")
           "--talosconfig-destination"
           (arg TALOSCONFIG)
           "--workers"
@@ -79,15 +80,17 @@ let
           (arg config.workers.cpus)
           "--memory-workers"
           (argStr config.workers.memory)
-          "--config-patch"
-          (arg "@${aivLabSettings.patches.storagePath}/bootstrap.yaml")
         ]
         ++ lib.optional config.withDebug "--with-debug"
         ++ lib.optional config.withKubespan "--with-kubespan"
         ++ lib.concatMap (mirror: [
           "--registry-mirror"
           mirror
-        ]) config.registryMirrors;
+        ]) config.registryMirrors
+        ++ lib.concatMap (patch: [
+          "--config-patch"
+          "@${patch}"
+        ]) config.configPatches;
 
       dockerArgs = lib.optionals (config.provisioner == "docker") (
         lib.optionals (config.docker.image != null) [

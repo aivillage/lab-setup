@@ -4,7 +4,7 @@
   host,
 }:
 let
-  manifestUrls = builtins.map (name: "${host}/patches/${name}.yaml") manifests;
+  manifestUrls = builtins.map (name: "${host}/${name}.yaml") manifests;
 
   patchData = {
     cluster = {

@@ -4,15 +4,16 @@
 # Uses con_shell patch generators with dev-specific overrides
 # =============================================================================
 {
-  pkgs,
-  lib,
   config,
+  lib,
   name,
+  pkgs,
   ...
 }:
 let
   inherit (lib) types mkOption mkIf;
 
+  cfg = config;
   aivLabSettings = (import ./settings.nix { inherit pkgs; }).aiv-lab;
 
   bootstrapPatch = import ../talos/patches/bootstrap.nix {
@@ -20,10 +21,10 @@ let
     manifests = [
       "cilium"
     ];
-    host = "http://${aivLabSettings.host}:${builtins.toString aivLabSettings.webserver.port}";
+    host = "http://${cfg.webserverHost}";
   };
 
-  traefik = import ../talos/patches/traefik.nix {
+  traefik = lib.aivLab.mkPatchTraefik {
     inherit pkgs;
     kubelib = config.kubelib;
   };
@@ -45,11 +46,11 @@ let
       set -euo pipefail
 
       echo "🔧 Generating development patches..."
-      mkdir -p "${aivLabSettings.patches.storagePath}"
-      cp -f "${bootstrapPatch}" "${aivLabSettings.patches.storagePath}/bootstrap.yaml"
-      cp -f "${cilium_patch}" "${aivLabSettings.patches.storagePath}/cilium.yaml"
-      cp -f "${ghcr_patch}" "${aivLabSettings.patches.storagePath}/ghcr.yaml"
-      cp -f "${traefik}" "${aivLabSettings.patches.storagePath}/traefik.yaml"
+      mkdir -p "${cfg.dataDir}"
+      cp -f "${bootstrapPatch}" "${cfg.dataDir}/bootstrap.yaml"
+      cp -f "${cilium_patch}" "${cfg.dataDir}/cilium.yaml"
+      cp -f "${ghcr_patch}" "${cfg.dataDir}/ghcr.yaml"
+      cp -f "${traefik}" "${cfg.dataDir}/traefik.yaml"
       echo "Development patches created"
     '';
   };
@@ -60,6 +61,10 @@ in
     kubelib = mkOption {
       type = types.attrs;
       description = "Kubelib to generate the chart.";
+    };
+    webserverHost = mkOption {
+      type = types.str;
+      description = "Host and IP from containers.lab.webserver";
     };
   };
 

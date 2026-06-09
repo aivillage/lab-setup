@@ -48,6 +48,7 @@ let
       nfsServer,
       nfsPath,
       extraPatches ? [ ],
+      modelStorePath ? "",
     }:
     let
       ciliumPatch = import ./patches/cilium.nix { inherit pkgs kubelib; };

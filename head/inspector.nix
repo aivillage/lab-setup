@@ -1,11 +1,14 @@
 {
+  lib,
   pkgs,
   inputs,
-  lib,
-  inspectorBin,
   ...
 }:
+let
+  inspectorBin = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.inspector;
+in
 {
+
   networking.hostName = "inspector";
 
   services.openssh.enable = true;
@@ -15,20 +18,19 @@
   ];
 
   environment.systemPackages = with pkgs; [
-    inspectorBin
-
-    parted
-    gptfdisk
-    util-linux
-    smartmontools
-    ethtool
-    tcpdump
     conntrack-tools
-    pciutils
-    usbutils
-    lshw
     dmidecode
+    ethtool
+    gptfdisk
     htop
+    inspectorBin
+    lshw
+    parted
+    pciutils
+    smartmontools
+    tcpdump
+    usbutils
+    util-linux
   ];
 
   programs.nix-ld.enable = true;
@@ -55,21 +57,21 @@
     wantedBy = [ "multi-user.target" ];
 
     path = with pkgs; [
-      hostname
-      util-linux
       coreutils
       gptfdisk
-      systemd
+      hostname
       parted
+      systemd
+      util-linux
     ];
 
     script = ''
-      ${inspectorBin}/bin/inspector inspect > /mnt/nas/inspector-report-$(hostname).yaml
+      ${lib.getExe inspectorBin} inspect > /mnt/nas/inspector-report-$(hostname).yaml
 
       if [ -f /mnt/nas/WIPE_ALL ]; then
         TIMESTAMP=$(date +%s)
         LOGFILE="/mnt/nas/wipe-$(hostname)-$TIMESTAMP.log"
-        ${inspectorBin}/bin/inspector wipe --confirm > $LOGFILE
+        ${lib.getExe inspectorBin} wipe --confirm > $LOGFILE
       fi
 
       sync
