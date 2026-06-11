@@ -31,7 +31,7 @@ in
     ciliumFile
     ghcrAuthFile
     mainPcvFile
-    modelPvcFile
+    # modelPvcFile
     nvidia.helmPatch
     nvidia.runtimeClassPatch
   ];

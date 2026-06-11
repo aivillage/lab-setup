@@ -9,34 +9,12 @@ let
     types
     mkEnableOption
     mkOption
-    escapeShellArgs
     optionalAttrs
     ;
 
   # 'config' here automatically represents services.containers.<instance-name>
   cfg = config;
   host = if pkgs.stdenv.isDarwin then "host.docker.internal" else "10.5.0.1";
-
-  providerSubModule =
-    { name, ... }:
-    {
-      options = {
-        remoteUrl = lib.mkOption { type = lib.types.str; };
-        dataDir = lib.mkOption {
-          type = lib.types.str;
-          default = "${cfg.dataDir}/registries/${name}";
-          description = "Local path for registry storage.";
-        };
-        localPort = lib.mkOption {
-          type = lib.types.int;
-          default = 8888;
-        };
-        containerName = lib.mkOption {
-          type = lib.types.str;
-          default = "registry-${name}";
-        };
-      };
-    };
 
 in
 {
@@ -50,8 +28,33 @@ in
         description = "Docker on Macos runs in VM and uses host.docker.internal, else use cidr gateway for cluster.";
       };
 
-      providers = mkOption {
-        type = types.attrsOf (types.submodule providerSubModule);
+      providers = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule (
+            { name, ... }:
+            {
+              options = {
+                remoteUrl = lib.mkOption { type = lib.types.str; };
+
+                dataDir = lib.mkOption {
+                  type = lib.types.str;
+                  default = "registries/${name}";
+                  description = "Local path for registry storage.";
+                };
+
+                localPort = lib.mkOption {
+                  type = lib.types.int;
+                  default = 8888;
+                };
+
+                containerName = lib.mkOption {
+                  type = lib.types.str;
+                  default = "registry-${name}";
+                };
+              };
+            }
+          )
+        );
         default = { };
         description = "Attribute set of specific registry mirror providers (e.g., dockerhub, ghcr).";
       };
@@ -85,12 +88,13 @@ in
       bindMounts = mkOption {
         type = types.listOf types.str;
         default = [
-          "${cfg.webserver.patchesDir}:/usr/share/nginx/html:ro"
+          "$PWD/${cfg.webserver.patchesDir}:/usr/share/nginx/html:ro"
         ];
         description = "A list of Docker volume bind mounts (e.g., '/host:/container:ro').";
       };
     };
   };
+
   config = {
     outputs.settings.processes =
       let
@@ -98,28 +102,18 @@ in
           lib.mapAttrs' (
             regName: regCfg:
             lib.nameValuePair regCfg.containerName {
-              command = escapeShellArgs [
-                "docker"
-                "run"
-                "--dns"
-                "8.8.8.8"
-                "--name"
-                "${regName}"
-                "--rm"
-                "-p"
-                "${toString regCfg.localPort}:5000"
-                "-e"
-                "REGISTRY_PROXY_REMOTEURL=${regCfg.remoteUrl}"
-                "-e"
-                "REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry"
-                "-v"
-                "${regCfg.dataDir}/storage:/var/lib/registry"
-                "--name"
-                regCfg.containerName
-                "registry:2"
-              ];
+              command = ''
+                docker run \
+                  --rm \
+                  --name ${regCfg.containerName} \
+                  --dns 8.8.8.8 \
+                  -p ${toString regCfg.localPort}:5000 \
+                  -e REGISTRY_PROXY_REMOTEURL="${regCfg.remoteUrl}" \
+                  -e REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry \
+                  -v "$PWD/${regCfg.dataDir}/:/var/lib/registry:z" \
+                  registry:2
+              '';
 
-              # Dependency removed. Relying strictly on retries to wait for the network.
               availability = {
                 restart = "on_failure";
                 backoff_seconds = 2;
@@ -131,26 +125,16 @@ in
 
         webserverProc = optionalAttrs cfg.webserver.enable {
           "${cfg.webserver.containerName}" = {
-            command = escapeShellArgs (
-              [
-                "docker"
-                "run"
-                "--rm"
-                "--name"
-                "${cfg.webserver.containerName}"
-                "-p"
-                "${toString cfg.webserver.localPort}:80"
-                "--name"
-                cfg.webserver.containerName
-              ]
-              ++ (builtins.concatMap (mount: [
-                "-v"
-                mount
-              ]) cfg.webserver.bindMounts)
-              ++ [ "nginx:latest" ]
-            );
-
-            # Dependency removed. Relying strictly on retries to wait for the network.
+            command = ''
+              docker run \
+                --rm \
+                --name ${cfg.webserver.containerName} \
+                -p ${toString cfg.webserver.localPort}:80 \
+                ${
+                  builtins.concatStringsSep " " (builtins.map (mount: "-v \"${mount}\"") cfg.webserver.bindMounts)
+                } \
+                nginx:latest
+            '';
             availability = {
               restart = "on_failure";
               backoff_seconds = 2;

@@ -17,18 +17,10 @@
       process-compose.default =
         { config, lib, ... }:
         {
-          options.lab = {
-            globalDataDir = lib.mkOption {
-              type = lib.types.str;
-              default = ".data";
-              description = "The global root directory for all lab state.";
-            };
-          };
-
           imports = [
             inputs.services-flake.processComposeModules.default
             (multiService ./tilt.nix)
-            (multiService ./local_path_storage.nix)
+            (multiService ./local-path-storage.nix)
             (multiService ./talos.nix)
             (multiService ./patches.nix)
             (multiService ./containers.nix)
@@ -36,11 +28,11 @@
 
           config =
             let
-              patchesDir = "${config.lab.globalDataDir}/talos/patches";
+              patchesDir = "patches";
             in
             {
               services = {
-                # look in ./containers.nix for options
+                # look in ./containers.nix for all available options
                 containers."lab" = {
                   enable = true;
                   webserver = {
@@ -53,28 +45,22 @@
                       "docker.io" = {
                         remoteUrl = "https://registry-1.docker.io";
                         localPort = 5000;
-
-                        dataDir = "${config.lab.globalDataDir}/registry";
                       };
                       "registry.k8s.io" = {
                         remoteUrl = "https://registry.k8s.io";
                         localPort = 5001;
-                        dataDir = "${config.lab.globalDataDir}/registry";
                       };
                       "gcr.io" = {
                         remoteUrl = "https://gcr.io";
                         localPort = 5002;
-                        dataDir = "${config.lab.globalDataDir}/registry";
                       };
                       "ghcr.io" = {
                         remoteUrl = "https://ghcr.io";
                         localPort = 5003;
-                        dataDir = "${config.lab.globalDataDir}/registry";
                       };
                       "quay.io" = {
                         remoteUrl = "https://quay.io";
                         localPort = 5004;
-                        dataDir = "${config.lab.globalDataDir}/registry";
                       };
                     };
                   };
@@ -84,53 +70,70 @@
                   enable = true;
                   dataDir = patchesDir;
                   kubelib = kubelib;
+                  # you can pass this an attr set or raw yaml
+                  dynamicPatch = ''
+                    machine:
+                      registries:
+                        config:
+                          ghcr.io:
+                            auth:
+                              auth: "base64encodedcredentials"
+                      time:
+                        bootTimeout: 2m
+                  '';
                   webserverHost = "${config.services.containers."lab".webserver.host}:${
                     builtins.toString config.services.containers."lab".webserver.localPort
                   }";
                 };
 
-                # look in ./talos.nix for options
-                talos = {
-                  cluster = {
-                    enable = true;
-                    dataDir = "${config.lab.globalDataDir}/talos";
-                    provisioner = "docker";
-                    workers = {
-                      count = 3;
-                      cpus = "2.0";
-                      memory = "2Gib";
-                    };
-                    registryMirrors = lib.mkIf config.services.containers."lab".registries.enable (
-                      lib.mapAttrsToList (
-                        name: cfg:
-                        "${name}=http://${config.services.containers."lab".registries.host}:${toString cfg.localPort}"
-                      ) config.services.containers."lab".registries.providers
-                    );
-                    configPatches = [
-                      "${patchesDir}/bootstrap.yaml"
-                    ];
-                    docker = lib.mkIf (config.services.talos.cluster.provisioner == "docker") {
-                      exposedPorts = "80:80/tcp,443:443/tcp";
-                    };
-                    # qemu provisioner is wip
-                    qemu = lib.mkIf (config.services.talos.cluster.provisioner == "qemu") {
-                      presets = [ "iso" ];
-                    };
+                # look in ./talos.nix for all avilable options
+                talos.cluster = {
+                  enable = true;
+                  provisioner = "docker";
+                  dataDir = "talos/";
+                  workers = {
+                    count = 3;
+                    cpus = "2.0";
+                    memory = "2Gib";
                   };
+                  docker = lib.mkIf (config.services.talos.cluster.provisioner == "docker") { };
+                  qemu = lib.mkIf (config.services.talos.cluster.provisioner == "qemu") {
+                    useSudo = true;
+                    presets = [ "iso" ];
+                  };
+                  configPatches = [
+                    "${patchesDir}/cilium-loader.yaml"
+                  ]
+                  ++
+                    lib.optionals
+                      (
+                        config.services.patches."lab".dynamicPatch != { }
+                        && config.services.patches."lab".dynamicPatch != [ ]
+                        && config.services.patches."lab".dynamicPatch != ""
+                      )
+                      [
+                        "${patchesDir}/dynamic.yaml"
+                      ];
+                  registryMirrors = lib.mkIf config.services.containers."lab".registries.enable (
+                    lib.mapAttrsToList (
+                      name: cfg:
+                      "${name}=http://${config.services.containers."lab".registries.host}:${toString cfg.localPort}"
+                    ) config.services.containers."lab".registries.providers
+                  );
                 };
 
-                local_path_storage."storage" = {
-                  enable = false;
-                  kubeconfig = "${config.lab.globalDataDir}/talos/kubeconfig";
+                local-path-storage."storage" = {
+                  enable = true;
+                  kubeconfig = "talos/kubeconfig";
                 };
 
                 tilt = {
                   tilt = {
-                    enable = false;
-                    dataDir = "${config.lab.globalDataDir}/postgres";
+                    enable = true;
+                    dataDir = "postgres";
                     runtimeInputs = [ ];
                     environment = {
-                      KUBECONFIG = "${config.lab.globalDataDir}/talos/kubeconfig";
+                      KUBECONFIG = "talos/kubeconfig";
                       NIX_CONFIG = "experimental-features = nix-command flakes";
                       NIX_PATH = "nixpkgs=${pkgs.path}";
                     };
@@ -140,7 +143,7 @@
 
               settings.processes = {
                 cluster.depends_on = {
-                  lab.condition = "process_completed_successfully";
+                  patches.condition = "process_completed_successfully";
                   "webserver-talos-patches" = {
                     condition = "process_started";
                   };
@@ -150,17 +153,17 @@
                     name: cfg: lib.nameValuePair "registry-${name}" { condition = "process_started"; }
                   ) config.services.containers."lab".registries.providers
                 );
-              };
 
-              # todo
-              # storage.depends_on = {
-              #   cluster.condition = "process_log_ready";
-              # };
-              #
-              # tilt.depends_on = {
-              #   storage.condition = "process_completed_successfully";
-              #   cluster.condition = "process_log_ready";
-              # };
+                storage.depends_on = {
+                  cluster.condition = "process_log_ready";
+                };
+
+                tilt.depends_on = {
+                  storage.condition = "process_completed_successfully";
+                  cluster.condition = "process_log_ready";
+                };
+
+              };
             };
         };
     };
