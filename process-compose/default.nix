@@ -42,10 +42,6 @@
                   registries = {
                     enable = true;
                     providers = {
-                      "docker.io" = {
-                        remoteUrl = "https://registry-1.docker.io";
-                        localPort = 5000;
-                      };
                       "registry.k8s.io" = {
                         remoteUrl = "https://registry.k8s.io";
                         localPort = 5001;
@@ -61,6 +57,10 @@
                       "quay.io" = {
                         remoteUrl = "https://quay.io";
                         localPort = 5004;
+                      };
+                      "docker.io" = {
+                        remoteUrl = "https://registry-1.docker.io";
+                        localPort = 5005;
                       };
                     };
                   };

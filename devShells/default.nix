@@ -76,9 +76,6 @@
             export TALOSCONFIG="$DATA_DIR/${config.process-compose.default.services.talos.cluster.dataDir}/talosconfig"
             export TALOS_STATE_DIR="$DATA_DIR/talos"
             export DIRENV_WARN_TIMEOUT=0
-            export TF_DATA_DIR="$PROJECT_ROOT/${config.process-compose.default.lab.globalDataDir}/terraform"
-            export TF_VAR_kubeconfig="$KUBECONFIG"
-            export MC_CONFIG_DIR="$PROJECT_ROOT/${config.process-compose.default.lab.globalDataDir}/minio"
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
           '';
         };
