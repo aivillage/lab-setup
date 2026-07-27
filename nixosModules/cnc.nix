@@ -22,7 +22,6 @@
   lib,
   pkgs,
   inputs,
-  fenix,
   inspector,
   ...
 }:
@@ -191,11 +190,10 @@ in
 
     # ── TFTP directory tree ─────────────────────────────────────
     systemd.tmpfiles.rules =
-      import ./pxe-boot.nix {
-        inherit pkgs;
+      import ../head/pxe-boot.nix {
+        inherit pkgs inspector;
         ip = cfg.ip;
         machines = lib.attrValues cfg.machines;
-        inspector = inspector.config.system.build;
         wipe = cfg.wipe;
       }
       ++ [

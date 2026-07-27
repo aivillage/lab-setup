@@ -47,6 +47,7 @@
           inputs.process-compose-flake.flakeModule
           ./packages/inspector.nix
           ./packages/inspector-netboot.nix
+          ./packages/inspector-iso.nix
           ./devShells
           ./process-compose
         ];
@@ -55,7 +56,6 @@
             config,
             lib,
             pkgs,
-            system,
             ...
           }:
           {
@@ -119,22 +119,47 @@
 
           nixosConfigurations = {
             # nixos-rebuild build-image --flake .#nas-installer-iso --image-variant iso
-            nas-installer-iso = inputs.nixpkgs.lib.nixosSystem {
+            installer = inputs.nixpkgs.lib.nixosSystem {
               system = "x86_64-linux";
               modules = [
-                ./head/nas-iso.nix
+                ./nixosModules/installer.nix
               ];
             };
           };
 
           nixosModules = {
+            inspector = { ... }: {
+              imports = [ ./nixosModules/inspector.nix ];
+              nixpkgs.overlays = [
+                (final: prev: {
+                  inspector = inputs.self.packages.${final.stdenv.hostPlatform.system}.inspector;
+                })
+              ];
+            };
+
+            inspector-iso = { modulesPath, ... }: {
+              imports = [
+                "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
+                inputs.self.nixosModules.inspector
+              ];
+            };
+
             pxe =
-              { ... }:
+              { pkgs, ... }:
               {
-                imports = [ ./head/default.nix ];
-                _module.args.inspector = inputs.self.nixosConfigurations.inspector;
+                imports = [ ./nixosModules/cnc.nix ];
+                _module.args.inspector = (inputs.nixpkgs.lib.nixosSystem {
+                  system = pkgs.stdenv.hostPlatform.system;
+                  specialArgs = { inherit inputs; };
+                  modules = [
+                    (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
+                    inputs.self.nixosModules.inspector
+                  ];
+                }).config.system.build;
               };
-            iso = import ./head/nas-iso.nix;
+            iso = {
+              imports = [ ./head/nas-iso.nix ];
+            };
           };
         };
       };

@@ -8,7 +8,7 @@
 let
   lib = pkgs.lib;
   message = if wipe then "WIPING ALL DATA" else "Booting inspector...";
-  cmdline = if wipe then "talos.platform=metal" else "talos.platform=metal"; # Placeholder if needed
+  # cmdline = if wipe then "talos.platform=metal" else "talos.platform=metal"; # Placeholder if needed
 
   wipeScript = pkgs.writeText "wipe.ipxe" ''
     #!ipxe
