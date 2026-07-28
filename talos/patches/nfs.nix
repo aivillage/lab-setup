@@ -42,16 +42,16 @@ let
 
 in
 pkgs.runCommand "nfs-provisioner.yaml" { } ''
-      set -euo pipefail
-      
-      (
-        cat << 'PATCH_START'
-  cluster:
-    inlineManifests:
-      - name: nfs-provisioner
-        contents: |
-  PATCH_START
-        sed 's/^/        /' "${renderedNfsManifests}"
-        
-      ) > "$out"
+  set -euo pipefail
+  
+  (
+    cat << 'PATCH_START'
+cluster:
+  inlineManifests:
+    - name: nfs-provisioner
+      contents: |
+PATCH_START
+    sed 's/^/        /' "${renderedNfsManifests}"
+    
+  ) > "$out"
 ''

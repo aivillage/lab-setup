@@ -39,25 +39,34 @@ let
   nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
   # ── Generate a patches directory ──────────────────────────────
   #
-  # Accepts lab-specific parameters (NFS server, paths, model store)
-  # and builds cilium, nvidia, nfs, and model-store patches internally.
+  # Accepts lab-specific parameters (model store, optional NFS server/path)
+  # and builds cilium, nvidia, and model-store patches internally.
   # Extra { name, file } patches can be appended via `extraPatches`.
   #
   mkGeneratePatches =
     {
-      nfsServer,
-      nfsPath,
+      nfsServer ? "",
+      nfsPath ? "/data",
       extraPatches ? [ ],
       modelStorePath ? "",
     }:
     let
       ciliumPatch = import ./patches/cilium.nix { inherit pkgs kubelib; };
 
-      nfsPatch = import ./patches/nfs.nix {
-        inherit pkgs kubelib;
-        server = nfsServer;
-        path = nfsPath;
-      };
+      nfsPatch =
+        if nfsServer != "" then
+          [
+            {
+              name = "nfs.yaml";
+              file = import ./patches/nfs.nix {
+                inherit pkgs kubelib;
+                server = nfsServer;
+                path = nfsPath;
+              };
+            }
+          ]
+        else
+          [ ];
 
       patches = [
         {
@@ -73,10 +82,6 @@ let
           file = nvidiaPatch.runtimeClassPatch;
         }
         {
-          name = "nfs.yaml";
-          file = nfsPatch;
-        }
-        {
           name = "control.yaml";
           file = ./patches/control.yaml;
         }
@@ -86,6 +91,7 @@ let
         }
 
       ]
+      ++ nfsPatch
       ++ extraPatches;
     in
     pkgs.writeShellScriptBin "generate-patches" ''

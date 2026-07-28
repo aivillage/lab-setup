@@ -10,14 +10,24 @@
       packages.inspector-netboot =
         let
           inspectorSystem = inputs.nixpkgs.lib.nixosSystem {
-            inherit system;
             specialArgs = { inherit inputs; };
             modules = [
+              {
+                nixpkgs.buildPlatform = system;
+                nixpkgs.hostPlatform = "x86_64-linux";
+              }
               (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
-              ../head/inspector.nix
+              inputs.self.nixosModules.inspector
             ];
           };
         in
-        inspectorSystem.config.system.build.netbootRamdisk;
+        pkgs.symlinkJoin {
+          name = "inspector-netboot";
+          paths = [
+            inspectorSystem.config.system.build.kernel
+            inspectorSystem.config.system.build.netbootRamdisk
+            inspectorSystem.config.system.build.netbootIpxeScript
+          ];
+        };
     };
 }

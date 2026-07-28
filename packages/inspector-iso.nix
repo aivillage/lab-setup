@@ -10,9 +10,12 @@
       packages.inspector-iso =
         let
           inspectorSystem = inputs.nixpkgs.lib.nixosSystem {
-            inherit system;
             specialArgs = { inherit inputs; };
             modules = [
+              {
+                nixpkgs.buildPlatform = system;
+                nixpkgs.hostPlatform = "x86_64-linux";
+              }
               inputs.self.nixosModules.inspector-iso
             ];
           };

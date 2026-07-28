@@ -40,7 +40,7 @@ let
         machineBlocks = lib.concatMapStringsSep "\n" (m: ''
           :${m.name}
           echo Booting ${m.name}...
-          kernel tftp://${ip}/${m.name}/vmlinuz talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1 module.sig_enforce=1
+          kernel tftp://${ip}/${m.name}/vmlinuz talos.config=http://${ip}:8080/configs/${m.name}.yaml talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1 module.sig_enforce=1
           initrd tftp://${ip}/${m.name}/initrd
           boot
         '') machines;
@@ -73,11 +73,12 @@ in
   "L+ /var/lib/tftpboot/boot.ipxe - - - - ${bootScript}"
   "d /var/lib/tftpboot/default 0755 root root -"
   "L+ /var/lib/tftpboot/default/bzImage - - - - ${inspector.kernel}/bzImage"
-  "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector.netbootRamdisk}/initrd"
+  "d /var/lib/tftpboot/configs 0755 root root -"
 ]
-# Per-machine kernel + initrd directories
+# Per-machine kernel + initrd + configScript directories
 ++ (lib.concatMap (m: [
   "d /var/lib/tftpboot/${m.name} 0755 root root -"
   "L+ /var/lib/tftpboot/${m.name}/vmlinuz - - - - ${m.image}/vmlinuz"
   "L+ /var/lib/tftpboot/${m.name}/initrd - - - - ${m.image}/initrd"
+  "L+ /var/lib/tftpboot/configs/${m.name}.yaml - - - - ${m.configScript}"
 ]) machines)

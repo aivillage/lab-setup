@@ -1,203 +1,207 @@
 # =====================================================================
-# lab-setup/pxe/default.nix
+# lab-setup: Pure PXE Boot & CNC Module (nixosModules.pxe / cnc.nix)
 #
-# Pure PXE boot module. Configures dnsmasq (DHCP + DNS + TFTP) and
-# iPXE chainloading to boot each machine into either its Talos image
-# or the inspector netboot image, routed by MAC address.
+# Configures dnsmasq (ProxyDHCP/DHCP + DNS + TFTP) and iPXE chainloading.
+# Automatically routes PXE booting nodes based on MAC address:
+#   - Known MAC address in `machines` -> Boots into Talos Linux.
+#   - Unknown / uninspected MAC      -> Boots into Hardware Inspector Netboot.
+#
+# Build standalone netboot image:
+#   nix build .#inspector-netboot
 #
 # Consumer does:
 #   imports = [ inputs.lab-setup.nixosModules.pxe ];
 #   lab-setup.pxe = {
 #     enable = true;
-#     ip = "10.211.0.10";
-#     machines = [ { ... } ];
-#     inspectorImage = <netboot build>;
+#     proxyDhcp = true;  # Coexist with external DHCP
+#     machines = machines;
+#     wipe = false;
 #   };
 #
-# Everything else (ZFS, users, SSH, tailscale, packages) belongs in
-# the lab repo's own configuration.nix.
+# Auto-detects IP address and domain name from host `config.networking`.
 # =====================================================================
+
 {
   config,
   lib,
   pkgs,
-  inputs,
   inspector,
   ...
 }:
-let
-  inherit (lib)
-    types
-    mkOption
-    mkEnableOption
-    mkIf
-    concatMap
-    ;
 
+let
   cfg = config.lab-setup.pxe;
+
+  # Determine default host IP from networking interfaces or fallback to 10.211.0.10
+  detectedIp =
+    let
+      addrs = lib.concatMap (i: map (a: a.address) i.ipv4.addresses) (lib.attrValues (config.networking.interfaces or { }));
+    in
+    if addrs != [ ] then lib.head addrs else "10.211.0.10";
+
+  # Determine default primary interface name from networking interfaces
+  detectedInterface =
+    let
+      ifaces = lib.attrNames (config.networking.interfaces or { });
+    in
+    if ifaces != [ ] then lib.head ifaces else "enp1s0";
+
+  # Extract gateway IP cleanly handling string or attrset (e.g. { address = "10.211.0.1"; })
+  gatewayIp =
+    let
+      gw = config.networking.defaultGateway;
+    in
+    if gw != null then (if lib.isAttrs gw then gw.address else gw) else cfg.gateway;
+
+  machinesList = if lib.isAttrs cfg.machines then lib.attrValues cfg.machines else cfg.machines;
+
+  # Build dnsmasq address entries dynamically for each machine's network interfaces
+  # Format: /<hostname>.<domain>/<ip> (e.g. /control.cluster.local/10.211.0.1)
+  machineAddresses = lib.concatMap (
+    m:
+    lib.mapAttrsToList (_ifaceName: ifaceCfg: "/${m.name}.${cfg.domain}/${ifaceCfg.ip}") (
+      m.network-interfaces or m.networkInterfaces or { }
+    )
+  ) machinesList;
+
+  pxeBootFiles = import ./pxe-boot.nix {
+    inherit pkgs;
+    ip = cfg.ip;
+    machines = machinesList;
+    inspector = inspector.config.system.build;
+    wipe = cfg.wipe;
+  };
 in
 {
   options.lab-setup.pxe = {
-    enable = mkEnableOption "PXE boot server for Talos machines";
+    enable = lib.mkEnableOption "PXE boot server for Talos machines";
 
-    ip = mkOption {
-      type = types.str;
+    ip = lib.mkOption {
+      type = lib.types.str;
       description = "IP address of this PXE/DHCP/TFTP server";
-      default = "10.211.0.10";
+      default = detectedIp;
     };
 
-    domain = mkOption {
-      type = types.str;
-      default = "aicl.local";
+    interface = lib.mkOption {
+      type = lib.types.str;
+      description = "Network interface for dnsmasq to listen on";
+      default = detectedInterface;
+    };
+
+    domain = lib.mkOption {
+      type = lib.types.str;
+      default = if (config.networking.domain or null) != null then config.networking.domain else "cluster.local";
       description = "Domain name for dnsmasq";
     };
 
-    gateway = mkOption {
-      type = types.str;
+    gateway = lib.mkOption {
+      type = lib.types.str;
       default = "10.211.0.1";
       description = "Gateway IP address";
     };
 
-    nameservers = mkOption {
-      type = types.listOf types.str;
-      default = [
-        "1.1.1.1"
-        "8.8.8.8"
-      ];
-      description = "DNS server IP addresses";
-    };
-
-    wipe = mkOption {
-      type = types.bool;
+    proxyDhcp = lib.mkOption {
+      type = lib.types.bool;
       default = false;
-      description = "Wipe all machines before booting";
+      description = "Enable dnsmasq ProxyDHCP mode (coexist with external DHCP like Ubiquiti)";
     };
 
-    mount-point = mkOption {
-      type = types.path;
-      description = "NFS mount point";
+    wipe = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Wipe disk before installing Talos";
     };
 
-    machines = mkOption {
-      type = types.attrsOf types.anything;
-
-      description = "Talos machines to PXE boot, mapping names to machine objects";
+    machines = lib.mkOption {
+      type = lib.types.either (lib.types.listOf lib.types.attrs) (lib.types.attrsOf lib.types.attrs);
+      default = { };
+      description = "List or attribute set of Talos machine definitions";
     };
 
-    # DHCP
-
-    interface = mkOption {
-      type = types.str;
-      default = "enp1s0";
-      description = "Network interface dnsmasq listens on";
-    };
-
-    dhcpRange = mkOption {
-      type = types.str;
-      default = "10.211.0.100,10.211.0.200,255.255.255.0,24h";
-    };
-
-    extraDhcpHosts = mkOption {
-      type = types.listOf types.str;
+    extraAddresses = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Additional static dhcp-host entries beyond the machine inventory";
-    };
-
-    extraAddresses = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      description = "Extra dnsmasq address= entries";
+      description = "Extra static address entries for dnsmasq (e.g. /router.cluster.local/10.211.0.1)";
     };
   };
 
-  # ════════════════════════════════════════════════════════════════
-  # Implementation
-  # ════════════════════════════════════════════════════════════════
-  config = mkIf cfg.enable {
-    services.nfs.server = {
-      enable = true;
-      exports = ''
-        ${cfg.mount-point} 10.211.0.0/24(rw,nohide,insecure,no_subtree_check,all_squash,anonuid=65534,anongid=65534)
-      '';
+  config = lib.mkIf cfg.enable {
+    # Open firewall ports for TFTP, DNS, and DHCP
+    networking.firewall = {
+      allowedUDPPorts = [
+        53 # DNS
+        67 # DHCP / ProxyDHCP
+        69 # TFTP
+      ];
+      allowedTCPPorts = [
+        53 # DNS
+      ];
     };
 
-    # ── dnsmasq: DHCP + DNS + TFTP + PXE ────────────────────────
-    services.resolved.enable = false;
+    # Set up TFTP directory and iPXE boot files using the auto-tmpfiles generator
+    systemd.tmpfiles.rules = pxeBootFiles;
 
+    # Configure dnsmasq for DNS, TFTP, and PXE booting
     services.dnsmasq = {
       enable = true;
-      alwaysKeepRunning = true;
       settings = {
-        interface = [ cfg.interface ];
+        # General settings
+        interface = cfg.interface;
         bind-interfaces = true;
-        log-dhcp = true;
-
-        # DNS
-        domain-needed = true;
-        bogus-priv = true;
-        server = cfg.nameservers;
-        expand-hosts = true;
         domain = cfg.domain;
 
-        # DHCP
-        dhcp-range = [ cfg.dhcpRange ];
-        dhcp-option = [
-          "option:router,${cfg.gateway}"
-          "option:dns-server,${cfg.ip}"
+        # Disable DNS caching if desired, or set a reasonable size
+        cache-size = 1000;
+
+        # Upstream DNS servers
+        server = [
+          "1.1.1.1"
+          "8.8.8.8"
         ];
 
-        # Static hosts — derived from machine inventory
-        dhcp-host = (concatMap (m: m.dhcpHosts) (lib.attrValues cfg.machines)) ++ cfg.extraDhcpHosts;
-        address = [
-          "/nas/${cfg.ip}"
-          "/.aiv.local/10.211.0.50"
-        ]
-        ++ cfg.extraAddresses;
+        # DHCP & PXE settings
+        dhcp-range =
+          if cfg.proxyDhcp then
+            [ "${gatewayIp},proxy" ]
+          else
+            [ "10.211.0.100,10.211.0.250,24h" ];
 
-        # TFTP / PXE chainloading
+        # Router and DNS options passed to DHCP clients (only in non-proxy mode)
+        dhcp-option =
+          if cfg.proxyDhcp then
+            [ ]
+          else
+            [
+              "option:router,${gatewayIp}"
+              "option:dns-server,${cfg.ip}"
+            ];
+
+        # Static DNS entries generated from machines attrset
+        address = [
+          "/${config.networking.hostName}.${cfg.domain}/${cfg.ip}"
+        ] ++ machineAddresses ++ cfg.extraAddresses;
+
+        # Enable TFTP server
         enable-tftp = true;
         tftp-root = "/var/lib/tftpboot";
 
-        dhcp-match = [
-          "set:efi-x86_64,option:client-arch,7"
-          "set:efi-x86_64,option:client-arch,9"
-          "set:ipxe,175"
-        ];
+        # PXE boot options
+        # Match iPXE user class to prevent boot loops
+        dhcp-userclass = "set:ipxe,iPXE";
 
+        # Legacy BIOS vs UEFI boot filename selection
+        # Tag 00007 = EFI x86-64, Tag 00011 = EFI ARM64, Tag 00000 = Legacy BIOS
         dhcp-boot = [
-          "tag:!ipxe,tag:!efi-x86_64,undionly.kpxe"
-          "tag:!ipxe,tag:efi-x86_64,ipxe.efi"
+          # If client is already running iPXE, serve the iPXE boot script
           "tag:ipxe,boot.ipxe"
+          # UEFI x86-64 -> serve ipxe.efi
+          "tag:7,ipxe.efi"
+          # UEFI BC -> serve ipxe.efi
+          "tag:9,ipxe.efi"
+          # Default legacy BIOS -> serve undionly.kpxe
+          "undionly.kpxe"
         ];
       };
     };
-
-    # ── Firewall: open DHCP + DNS + TFTP ────────────────────────
-    networking.firewall = {
-      allowedTCPPorts = [
-        53
-        111
-        2049
-      ];
-      allowedUDPPorts = [
-        53
-        67
-        69
-        111
-        2049
-      ];
-    };
-
-    # ── TFTP directory tree ─────────────────────────────────────
-    systemd.tmpfiles.rules =
-      import ../head/pxe-boot.nix {
-        inherit pkgs inspector;
-        ip = cfg.ip;
-        machines = lib.attrValues cfg.machines;
-        wipe = cfg.wipe;
-      }
-      ++ [
-        "z ${cfg.mount-point} 0777 nobody nogroup -"
-      ];
   };
 }

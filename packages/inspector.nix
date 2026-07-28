@@ -8,18 +8,10 @@
     }:
     {
       packages.inspector =
-        let
-          # Grab fenix directly from the evaluated system inputs
-          rustToolchain = inputs'.fenix.packages.stable.minimalToolchain;
-
-          rustPlatform = pkgs.makeRustPlatform {
-            cargo = rustToolchain;
-            rustc = rustToolchain;
-          };
-        in
-        rustPlatform.buildRustPackage {
+        pkgs.rustPlatform.buildRustPackage {
           pname = "inspector";
           version = "0.1.0";
+          auditable = false;
 
           # Note: Ensure this relative path correctly points to the
           # root of your Rust workspace from where this file lives.
