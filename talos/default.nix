@@ -44,6 +44,11 @@ let
         default = false;
         description = "Whether this is a control plane node";
       };
+      wipe = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Whether to wipe this specific machine on next PXE boot";
+      };
       network-interfaces = mkOption {
         type = types.attrsOf interfaceType;
         description = "Network interfaces keyed by device name (e.g. enp1s0)";

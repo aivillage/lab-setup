@@ -26,6 +26,7 @@
   lib,
   pkgs,
   inspector,
+  inputs ? { },
   ...
 }:
 
@@ -47,11 +48,7 @@ let
     if ifaces != [ ] then lib.head ifaces else "enp1s0";
 
   # Extract gateway IP cleanly handling string or attrset (e.g. { address = "10.211.0.1"; })
-  gatewayIp =
-    let
-      gw = config.networking.defaultGateway;
-    in
-    if gw != null then (if lib.isAttrs gw then gw.address else gw) else cfg.gateway;
+  gatewayIp = cfg.gateway;
 
   machinesList = if lib.isAttrs cfg.machines then lib.attrValues cfg.machines else cfg.machines;
 
@@ -65,7 +62,7 @@ let
   ) machinesList;
 
   pxeBootFiles = import ./pxe-boot.nix {
-    inherit pkgs;
+    inherit pkgs inputs;
     ip = cfg.ip;
     machines = machinesList;
     inspector = inspector.config.system.build;
@@ -126,6 +123,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    nixpkgs.config.allowUnsupportedSystem = true;
+
+    environment.systemPackages = with pkgs; [
+      talosctl
+      kubectl
+    ];
+
     # Open firewall ports for TFTP, DNS, and DHCP
     networking.firewall = {
       allowedUDPPorts = [
@@ -145,10 +149,14 @@ in
     services.dnsmasq = {
       enable = true;
       settings = {
+        # Disable DNS server if proxyDhcp is active to avoid port 53 conflicts / DNS hijacking
+        port = if cfg.proxyDhcp then 0 else 53;
+
         # General settings
         interface = cfg.interface;
         bind-interfaces = true;
         domain = cfg.domain;
+        log-dhcp = true;
 
         # Disable DNS caching if desired, or set a reasonable size
         cache-size = 1000;
@@ -185,21 +193,36 @@ in
         enable-tftp = true;
         tftp-root = "/var/lib/tftpboot";
 
-        # PXE boot options
-        # Match iPXE user class to prevent boot loops
+        # Match iPXE user class (Option 77 & Option 175) to prevent boot loops
         dhcp-userclass = "set:ipxe,iPXE";
+        dhcp-match = [
+          "set:ipxe,175"
+          "set:7,60,PXEClient:Arch:00007"
+          "set:9,60,PXEClient:Arch:00009"
+          "set:7,option:client-arch,7"
+          "set:9,option:client-arch,9"
+        ];
 
         # Legacy BIOS vs UEFI boot filename selection
-        # Tag 00007 = EFI x86-64, Tag 00011 = EFI ARM64, Tag 00000 = Legacy BIOS
         dhcp-boot = [
           # If client is already running iPXE, serve the iPXE boot script
           "tag:ipxe,boot.ipxe"
-          # UEFI x86-64 -> serve ipxe.efi
-          "tag:7,ipxe.efi"
-          # UEFI BC -> serve ipxe.efi
-          "tag:9,ipxe.efi"
-          # Default legacy BIOS -> serve undionly.kpxe
-          "undionly.kpxe"
+          # UEFI x86-64 -> serve ipxe.efi ONLY if NOT already running iPXE!
+          "tag:!ipxe,tag:7,ipxe.efi"
+          # UEFI BC -> serve ipxe.efi ONLY if NOT already running iPXE!
+          "tag:!ipxe,tag:9,ipxe.efi"
+          # Default UEFI bootloader -> serve ipxe.efi ONLY if NOT already running iPXE!
+          "tag:!ipxe,ipxe.efi"
+        ];
+
+        # ProxyDHCP PXE Service broadcast entries
+        dhcp-option-force = [
+          "tag:ipxe,option:bootfile-name,boot.ipxe"
+        ];
+        pxe-prompt = "Booting PXE..., 1";
+        pxe-service = [
+          "x86-64_EFI, Boot iPXE UEFI, ipxe.efi"
+          "X86-64_EFI, Boot iPXE UEFI, ipxe.efi"
         ];
       };
     };

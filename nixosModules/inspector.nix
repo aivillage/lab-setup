@@ -60,11 +60,13 @@ in
       path = with pkgs; [
         coreutils
         curl
+        dmidecode
         gptfdisk
         hostname
         iproute2
         jq
         parted
+        pciutils
         systemd
         util-linux
       ];
@@ -75,17 +77,89 @@ in
         REPORT_FILE="/tmp/inspector-report.yaml"
         LOG_FILE="/var/log/inspector-report.yaml"
 
-        # Determine hostname (runtime hostname -> NixOS config hostname fallback)
-        NODE_HOSTNAME=$(hostname 2>/dev/null || echo "")
-        if [ -z "$NODE_HOSTNAME" ] || [ "$NODE_HOSTNAME" = "localhost" ]; then
+        # Discover default/primary network interface and node IP
+        PRIMARY_IFACE=$(ip route show default 2>/dev/null | grep -oP 'dev \K\S+' | head -n1 || true)
+        if [ -z "$PRIMARY_IFACE" ]; then
+          for dev in /sys/class/net/*; do
+            if [ -d "$dev" ]; then
+              devname=$(basename "$dev")
+              if [ "$devname" != "lo" ] && [ -f "$dev/address" ]; then
+                PRIMARY_IFACE="$devname"
+                break
+              fi
+            fi
+          done
+        fi
+
+        MY_IP=""
+        if [ -n "$PRIMARY_IFACE" ]; then
+          MY_IP=$(ip -4 addr show dev "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -n1 || true)
+        fi
+
+        # Helper to check if a candidate hostname is valid and non-generic
+        is_valid_hostname() {
+          local name="$1"
+          if [ -z "$name" ]; then return 1; fi
+          case "$name" in
+            localhost*|nixos*|inspector*|"(none)"|"") return 1 ;;
+            *) return 0 ;;
+          esac
+        }
+
+        NODE_HOSTNAME=""
+
+        # 1. Determine system hostname (e.g. set via DHCP or kernel arg)
+        SYS_HOST=$(hostname 2>/dev/null || echo "")
+        if is_valid_hostname "$SYS_HOST"; then
+          NODE_HOSTNAME="$SYS_HOST"
+        fi
+
+        # 2. Reverse DNS lookup on active interface IP
+        if ! is_valid_hostname "$NODE_HOSTNAME" && [ -n "$MY_IP" ]; then
+          PTR_NAME=$(getent hosts "$MY_IP" 2>/dev/null | awk '{print $2}' | head -n1 || true)
+          if is_valid_hostname "$PTR_NAME"; then
+            NODE_HOSTNAME="$PTR_NAME"
+          fi
+        fi
+
+        # 3. Fallback to Deterministic Lowest Physical Interface MAC Address (Port 0)
+        if ! is_valid_hostname "$NODE_HOSTNAME"; then
+          MAC_ADDR=$(for dev in /sys/class/net/*; do
+            if [ -d "$dev" ] && [ "$(basename "$dev")" != "lo" ] && [ -f "$dev/address" ] && [ -d "$dev/device" ]; then
+              cand=$(cat "$dev/address" 2>/dev/null | tr ':' '-' | tr -d ' \t\n\r' || true)
+              if [ -n "$cand" ] && [ "$cand" != "00-00-00-00-00-00" ]; then
+                echo "$cand"
+              fi
+            fi
+          done | sort | head -n1 || true)
+
+          if [ -n "$MAC_ADDR" ] && [ "$MAC_ADDR" != "00-00-00-00-00-00" ]; then
+            NODE_HOSTNAME="$MAC_ADDR"
+          fi
+        fi
+
+        # 4. Fallback to DMI System Serial Number
+        if ! is_valid_hostname "$NODE_HOSTNAME"; then
+          DMI_SERIAL=$(dmidecode -s system-serial-number 2>/dev/null | tr -d ' \t\n\r' || true)
+          if [ -n "$DMI_SERIAL" ] && [ "$DMI_SERIAL" != "NotSpecified" ] && [ "$DMI_SERIAL" != "To-be-filled-by-O.E.M." ]; then
+            NODE_HOSTNAME="$DMI_SERIAL"
+          fi
+        fi
+
+        # 5. Final fallback to configuredHostName option
+        if ! is_valid_hostname "$NODE_HOSTNAME"; then
           NODE_HOSTNAME="${configuredHostName}"
+        fi
+
+        if ! is_valid_hostname "$NODE_HOSTNAME"; then
+          NODE_HOSTNAME="unknown-node"
         fi
 
         echo "==> Running Hardware Inspector for host: $NODE_HOSTNAME..."
         ${lib.getExe pkgs.inspector} inspect > "$REPORT_FILE"
         cp "$REPORT_FILE" "$LOG_FILE"
 
-        # Discover CNC Server Target (cmdline -> DHCP Gateway -> Default 10.211.0.10:8080)
+        # Discover CNC Server Target (cmdline -> DHCP Gateway)
         CMDLINE_SERVER=$(cat /proc/cmdline | grep -oP 'inspector.server=\K\S+' || true)
         GATEWAY_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -n1 || true)
 
@@ -94,7 +168,8 @@ in
         elif [ -n "$GATEWAY_IP" ]; then
           CNC_SERVER="$GATEWAY_IP:8080"
         else
-          CNC_SERVER="10.211.0.10:8080"
+          echo "[ERROR] Could not discover CNC Server target (no cmdline inspector.server and no default gateway route)."
+          exit 1
         fi
 
         # Normalize protocol prefix

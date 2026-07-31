@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import subprocess
+import tempfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -45,8 +47,47 @@ class InspectorHandler(BaseHTTPRequestHandler):
             conf_name = os.path.basename(self.path)
             configs_dir = Path(os.environ.get("CONFIGS_DIR", "/var/lib/tftpboot/configs"))
             conf_path = configs_dir / conf_name
+            content = None
+
+            cache_dir = Path("/var/lib/inspector-api")
+            if conf_name == "talosconfig" and (cache_dir / "talosconfig").exists():
+                content = (cache_dir / "talosconfig").read_bytes()
+
             if conf_path.exists() and conf_path.is_file():
                 content = conf_path.read_bytes()
+            elif conf_path.exists() and conf_path.is_dir() and (conf_path / "bin" / "generate-config").exists():
+                cache_dir = Path("/var/lib/inspector-api")
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    cache_dir = Path(tempfile.gettempdir()) / "inspector-api"
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+
+                gen_patches = configs_dir / "generate-patches" / "bin" / "generate-patches"
+                if gen_patches.exists():
+                    subprocess.run([str(gen_patches), str(cache_dir)], capture_output=True, text=True, cwd=str(cache_dir))
+
+                secrets_file = cache_dir / "secrets.yaml"
+                secrets_arg = [str(secrets_file)] if secrets_file.exists() else []
+
+                gen_bin = conf_path / "bin" / "generate-config"
+                res = subprocess.run([str(gen_bin), str(cache_dir)] + secrets_arg, capture_output=True, text=True, cwd=str(cache_dir))
+
+                yaml_file = cache_dir / conf_name
+                if yaml_file.exists():
+                    content = yaml_file.read_bytes()
+                else:
+                    print(f"[ERROR] generate-config ran but output {yaml_file} not found: {res.stderr}")
+            else:
+                gen_patches = configs_dir / "generate-patches" / "bin" / "generate-patches"
+                if gen_patches.exists():
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        subprocess.run([str(gen_patches), tmpdir], capture_output=True, text=True, cwd=tmpdir)
+                        patch_file = Path(tmpdir) / conf_name
+                        if patch_file.exists():
+                            content = patch_file.read_bytes()
+
+            if content is not None:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/yaml")
                 self.send_header("Content-Length", str(len(content)))

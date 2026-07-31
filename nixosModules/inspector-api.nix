@@ -49,7 +49,11 @@ in
         ExecStart = "${lib.getExe inspectorApiPkg}";
         Restart = "always";
         RestartSec = 5;
-        StateDirectory = "inspector/reports";
+        StateDirectory = [
+          "inspector/reports"
+          "inspector-api"
+        ];
+        StateDirectoryMode = "0755";
         DynamicUser = true;
       };
     };

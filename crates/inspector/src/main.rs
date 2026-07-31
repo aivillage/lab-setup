@@ -317,15 +317,41 @@ fn get_network_devices() -> Vec<NetworkDevice> {
 }
 
 fn get_pci_devices() -> Vec<PciDevice> {
-    // lspci -mm: "Slot" "Class" "Vendor" "Device"
-    let output = Command::new("lspci").arg("-mm").output();
+    // lspci -Dmm output format:
+    // Slot "Class" "Vendor" "Device" ["SVendor" "SDevice"]
+    // e.g. 0000:00:00.0 "Host bridge" "Intel Corporation" "Raptor Lake-P"
+    let output = Command::new("lspci").arg("-Dmm").output();
 
     let mut devices = Vec::new();
 
     if let Ok(out) = output {
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split("\" \"").collect();
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut parts = Vec::new();
+            let mut in_quote = false;
+            let mut current = String::new();
+
+            for ch in line.chars() {
+                if ch == '"' {
+                    in_quote = !in_quote;
+                } else if (ch == ' ' || ch == '\t') && !in_quote {
+                    if !current.is_empty() {
+                        parts.push(current.clone());
+                        current.clear();
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+            if !current.is_empty() {
+                parts.push(current);
+            }
+
             if parts.len() >= 4 {
                 devices.push(PciDevice {
                     slot: parts[0].trim_matches('"').to_string(),

@@ -12,31 +12,62 @@
 {
   pkgs,
   lib,
-  inputs,
+  inputs ? { },
 }:
 
 let
-  kubelib = inputs.nix-kube-generators.lib { inherit pkgs; };
+  kubelib =
+    if inputs ? nix-kube-generators then
+      inputs.nix-kube-generators.lib { inherit pkgs; }
+    else if
+      inputs ? lab-setup && inputs.lab-setup ? inputs && inputs.lab-setup.inputs ? nix-kube-generators
+    then
+      inputs.lab-setup.inputs.nix-kube-generators.lib { inherit pkgs; }
+    else
+      null;
 
   # ── Per-machine patch: hostname + network + install ───────────
   mkMachinePatch =
     { machine, schematic }:
     let
       installerImage = "factory.talos.dev/installer/${builtins.readFile schematic}:${machine.version}";
+      ifaces = machine.network-interfaces or { };
+      explicitPrimary = lib.filterAttrs (_name: iface: iface.primary or false) ifaces;
+      primaryIfaceName =
+        if explicitPrimary != { } then
+          lib.head (lib.attrNames explicitPrimary)
+        else if ifaces != { } then
+          lib.head (lib.attrNames ifaces)
+        else
+          null;
+      ifaceList =
+        if primaryIfaceName != null then
+          [
+            {
+              interface = primaryIfaceName;
+              dhcp = true;
+            }
+          ]
+        else
+          [ ];
+      patchObj = {
+        machine = {
+          network = {
+            hostname = machine.name;
+          } // (if ifaceList != [ ] then { interfaces = ifaceList; } else { });
+          install = {
+            image = installerImage;
+            wipe = true;
+            diskSelector = {
+              size = ">= 400GB";
+            };
+          };
+        };
+      };
     in
-    pkgs.writeText "${machine.name}-machine-patch.yaml" ''
-      machine:
-        network:
-          hostname: ${machine.name}
-          interfaces:
-        install:
-          image: ${installerImage}
-          disk: null
-          wipe: true
-          diskSelector:
-            size: ${toString machine.diskSelector.size}
-    '';
-  nvidiaPatch = import ./patches/nvidia.nix { inherit pkgs kubelib; };
+    pkgs.writeText "${machine.name}-machine-patch.yaml" (builtins.toJSON patchObj);
+  nvidiaPatch =
+    if kubelib != null then import ./patches/nvidia.nix { inherit pkgs kubelib; } else null;
   # ── Generate a patches directory ──────────────────────────────
   #
   # Accepts lab-specific parameters (model store, optional NFS server/path)
@@ -49,12 +80,34 @@ let
       nfsPath ? "/data",
       extraPatches ? [ ],
       modelStorePath ? "",
+      webserverHost ? "http://10.211.0.10:8080/configs",
     }:
     let
-      ciliumPatch = import ./patches/cilium.nix { inherit pkgs kubelib; };
+      ciliumPatch =
+        if kubelib != null then import ./patches/cilium.nix { inherit pkgs kubelib; } else null;
+      ciliumLoaderPatch = import ./patches/cilium-loader.nix {
+        inherit pkgs;
+        host = webserverHost;
+        ciliumPatchName = "cilium.yaml";
+      };
+
+      nvidiaPatches =
+        if nvidiaPatch != null then
+          [
+            {
+              name = "nvidia-helm.yaml";
+              file = nvidiaPatch.helmPatch;
+            }
+            {
+              name = "nvidia-runtime.yaml";
+              file = nvidiaPatch.runtimeClassPatch;
+            }
+          ]
+        else
+          [ ];
 
       nfsPatch =
-        if nfsServer != "" then
+        if nfsServer != "" && kubelib != null then
           [
             {
               name = "nfs.yaml";
@@ -70,27 +123,19 @@ let
 
       patches = [
         {
-          name = "cilium.yaml";
-          file = ciliumPatch;
-        }
-        {
-          name = "nvidia-helm.yaml";
-          file = nvidiaPatch.helmPatch;
-        }
-        {
-          name = "nvidia-runtime.yaml";
-          file = nvidiaPatch.runtimeClassPatch;
-        }
-        {
-          name = "control.yaml";
-          file = ./patches/control.yaml;
+          name = "cilium-loader.yaml";
+          file = ciliumLoaderPatch;
         }
         {
           name = "schedule.yaml";
           file = ./patches/schedule.yaml;
         }
-
       ]
+      ++ lib.optional (ciliumPatch != null) {
+        name = "cilium.yaml";
+        file = ciliumPatch;
+      }
+      ++ nvidiaPatches
       ++ nfsPatch
       ++ extraPatches;
     in
@@ -133,15 +178,27 @@ let
         exit 1
       fi
 
+      # Expand to absolute path and change into target output directory
+      PATCHES_DIR="$(cd "$PATCHES_DIR" && pwd)"
+      cd "$PATCHES_DIR"
+
       SECRETS_FLAG=""
       if [ -n "$SECRETS_FILE" ]; then
         SECRETS_FLAG="--with-secrets $SECRETS_FILE"
       fi
 
-      # Collect all *.yaml files in the patches directory
+      # Collect all *.yaml files in the patches directory (skipping raw cilium.yaml served over HTTP and nvidia patches for non-nvidia nodes)
       PATCH_FLAGS=""
       for f in "$PATCHES_DIR"/*.yaml; do
         [ -f "$f" ] || continue
+        case "$(basename "$f")" in
+          cilium.yaml|nfs.yaml|control.yaml|worker*.yaml) continue ;;
+        esac
+        ${lib.optionalString (!machine.nvidia) ''
+          case "$(basename "$f")" in
+            nvidia*) continue ;;
+          esac
+        ''}
         PATCH_FLAGS="$PATCH_FLAGS --config-patch @$f"
       done
 
@@ -157,8 +214,7 @@ let
         "${clusterName}" \
         "${clusterEndpoint}" \
         --talos-version "${talosVersion}" \
-        --output-types "${outputType}" \
-        --output "${machine.name}.yaml" \
+        --output-types "${if machine.controlPlane then "controlplane,talosconfig" else "worker"}" \
         $PATCH_FLAGS \
         --config-patch @${machinePatch} \
         ${lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches} \
@@ -167,8 +223,24 @@ let
         --with-examples=false \
         --force
 
+      if [ -f "controlplane.yaml" ]; then
+        mv controlplane.yaml "${machine.name}.yaml"
+      fi
+      if [ -f "worker.yaml" ]; then
+        mv worker.yaml "${machine.name}.yaml"
+      fi
+
+      # Strip redundant empty HostnameConfig document appended by talosctl gen config
+      sed -i '/---/,$ d' "${machine.name}.yaml"
+
       chmod 644 "${machine.name}.yaml"
       echo "  → ${machine.name}.yaml"
+
+      ${lib.optionalString (machine.controlPlane) ''
+        ${pkgs.talosctl}/bin/talosctl --talosconfig talosconfig config endpoint 10.211.0.30
+        chmod 644 talosconfig
+        echo "  → talosconfig"
+      ''}
     '';
 
 in

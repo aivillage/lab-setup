@@ -102,9 +102,13 @@
 
           pxe = {
             imports = [ ./nixosModules/cnc.nix ];
+            _module.args.inputs = inputs;
             _module.args.inspector = (inputs.nixpkgs.lib.nixosSystem {
               system = "x86_64-linux";
-              modules = [ inputs.self.nixosModules.inspector ];
+              modules = [
+                "${inputs.nixpkgs}/nixos/modules/installer/netboot/netboot-minimal.nix"
+                inputs.self.nixosModules.inspector
+              ];
             });
           };
         };
