@@ -68,9 +68,16 @@ class InspectorHandler(BaseHTTPRequestHandler):
                     subprocess.run([str(gen_patches), str(cache_dir)], capture_output=True, text=True, cwd=str(cache_dir))
 
                 secrets_file = cache_dir / "secrets.yaml"
+                credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+                talos_secrets_credential = os.environ.get("TALOS_SECRETS_CREDENTIAL")
+                if credentials_dir and talos_secrets_credential:
+                    credential_path = Path(credentials_dir) / talos_secrets_credential
+                    if credential_path.exists():
+                        secrets_file = credential_path
                 secrets_arg = [str(secrets_file)] if secrets_file.exists() else []
-
                 gen_bin = conf_path / "bin" / "generate-config"
+                if not secrets_arg:
+                    print(f"[WARN] no talos secrets bundle found; {gen_bin} will mint fresh, inconsistent cluster secrets")
                 res = subprocess.run([str(gen_bin), str(cache_dir)] + secrets_arg, capture_output=True, text=True, cwd=str(cache_dir))
 
                 yaml_file = cache_dir / conf_name

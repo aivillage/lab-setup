@@ -32,6 +32,17 @@ in
       default = "/var/lib/inspector/reports";
       description = "Directory to store incoming hardware inspection reports";
     };
+
+    talosSecretsFile = mkOption {
+      type = types.path;
+      description = ''
+        Path to a decrypted Talos secrets bundle (as produced by
+        `talosctl gen secrets`, e.g. sops-nix's
+        `config.sops.secrets."talos-secrets".path`) used to generate
+        machine configs with a consistent cluster CA/bootstrap token
+        instead of minting fresh secrets on every request.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -43,6 +54,7 @@ in
       environment = {
         PORT = toString cfg.port;
         REPORTS_DIR = cfg.reportsDir;
+        TALOS_SECRETS_CREDENTIAL = "talos-secrets";
       };
 
       serviceConfig = {
@@ -55,6 +67,7 @@ in
         ];
         StateDirectoryMode = "0755";
         DynamicUser = true;
+        LoadCredential = "talos-secrets:${cfg.talosSecretsFile}";
       };
     };
 
