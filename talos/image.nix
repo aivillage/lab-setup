@@ -1,6 +1,4 @@
-{
-  pkgs ? import <nixpkgs> { },
-}:
+{ pkgs }:
 {
   version,
   sha256,
@@ -76,7 +74,7 @@ pkgs.stdenvNoCC.mkDerivation {
     export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     export PATH="${pkgs.curl}/bin:$PATH"
 
-    # --- STEP 2: Download the Assets ---
+    SCHEMATIC_ID=$(cat ${schematic})
 
     if [ "${toString imageConfig.isDirectory}" = "1" ]; then
         # === DIRECTORY MODE (pxe-assets) ===
@@ -84,8 +82,8 @@ pkgs.stdenvNoCC.mkDerivation {
         mkdir -p $out
 
         # Construct URLs for Kernel and Initramfs
-        KERNEL_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${builtins.readFile schematic}/${version}/kernel-${arch}"
-        INITRD_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${builtins.readFile schematic}/${version}/initramfs-${arch}.xz"
+        KERNEL_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/$SCHEMATIC_ID/${version}/kernel-${arch}"
+        INITRD_URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/$SCHEMATIC_ID/${version}/initramfs-${arch}.xz"
 
         echo "    Fetching Kernel: $KERNEL_URL"
         curl -L --fail --show-error --progress-bar -o $out/vmlinuz "$KERNEL_URL"
@@ -95,7 +93,7 @@ pkgs.stdenvNoCC.mkDerivation {
 
     else
         # === SINGLE FILE MODE (iso, raw, pxe-script) ===
-        URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/${builtins.readFile schematic}/${version}/${fileName}"
+        URL="https://${imageConfig.domain}/${imageConfig.pathPrefix}/$SCHEMATIC_ID/${version}/${fileName}"
         echo "--> Downloading single image from: $URL"
         curl -L --fail --show-error --progress-bar -o $out "$URL"
     fi

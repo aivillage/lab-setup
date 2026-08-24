@@ -5,8 +5,13 @@ result-*
 # Ignore automatically generated direnv output
 .direnv
 .data
+.cluster/
 .envhost
 .env
 target
 .envrc
 *.csv
+
+# Python cache
+__pycache__/
+*.pyc

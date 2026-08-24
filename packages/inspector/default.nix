@@ -13,10 +13,15 @@
           version = "0.1.0";
           auditable = false;
 
-          # Note: Ensure this relative path correctly points to the
-          # root of your Rust workspace from where this file lives.
-          src = ../.;
-          cargoLock.lockFile = ../Cargo.lock;
+          src = pkgs.lib.fileset.toSource {
+            root = ../../.;
+            fileset = pkgs.lib.fileset.unions [
+              ../../Cargo.toml
+              ../../Cargo.lock
+              ../../crates/inspector
+            ];
+          };
+          cargoLock.lockFile = ../../Cargo.lock;
 
           buildInputs = [ pkgs.openssl ];
 

@@ -20,10 +20,9 @@ let
     machine:
       files:
         - content: |
-            [plugins]
-              [plugins."io.containerd.cri.v1.runtime"]
-                [plugins."io.containerd.cri.v1.runtime".containerd]
-                  default_runtime_name = "nvidia"
+            [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia]
+              runtime_type = "io.containerd.runc.v2"
+          permissions: 0644
           path: /etc/cri/conf.d/20-customization.part
           op: create
   '';
@@ -51,6 +50,9 @@ let
 
   # ── Device plugin helm chart (cluster-wide) ───────────────────
   devicePluginValues = {
+    cdi = {
+      enabled = true;
+    };
     gfd = {
       enabled = true;
     };

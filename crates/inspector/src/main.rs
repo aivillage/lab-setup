@@ -47,6 +47,7 @@ struct BlockDevice {
     model: Option<String>,
     transport: Option<String>,
     serial: Option<String>,
+    by_id: Option<String>,
     #[serde(skip_serializing)]
     read_only: bool,
 }
@@ -145,14 +146,27 @@ fn run_wipe(confirm: bool) {
             dev.size_bytes
         );
 
-        // 1. Wipe Filesystem Signatures
+        // 1. Hardware Block Discard / TRIM (Resets SSD Flash Translation Layer)
+        let status_blkdiscard = Command::new("blkdiscard")
+            .args(&["-f", &format!("/dev/{}", dev.name)])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+
+        match &status_blkdiscard {
+            Ok(s) if s.success() => println!("  -> blkdiscard: Successfully TRIMmed /dev/{}", dev.name),
+            Ok(s) => println!("  -> blkdiscard: Skipped/Unsupported (exit code: {})", s),
+            Err(e) => println!("  -> blkdiscard: Exec error ({})", e),
+        }
+
+        // 2. Wipe Filesystem Signatures
         let status_wipefs = Command::new("wipefs")
             .args(&["-a", &format!("/dev/{}", dev.name)])
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .status();
 
-        // 2. Zap GPT/MBR tables
+        // 3. Zap GPT/MBR tables
         let status_sgdisk = Command::new("sgdisk")
             .args(&["--zap-all", &format!("/dev/{}", dev.name)])
             .stdout(Stdio::null())
@@ -161,11 +175,11 @@ fn run_wipe(confirm: bool) {
 
         match (status_wipefs, status_sgdisk) {
             (Ok(w), Ok(s)) if w.success() && s.success() => {
-                println!("  -> Successfully wiped /dev/{}", dev.name);
+                println!("  -> Successfully wiped partitions and headers on /dev/{}", dev.name);
             }
             (Ok(w), Ok(s)) => {
                 println!(
-                    "  -> Warning: Issues encountered (wipefs: {}, sgdisk: {})",
+                    "  -> Warning: Partition/header issues (wipefs: {}, sgdisk: {})",
                     w, s
                 );
             }
@@ -255,13 +269,17 @@ fn get_block_devices() -> Vec<BlockDevice> {
                     .blockdevices
                     .into_iter()
                     .filter(|d| d.dev_type == "disk")
-                    .map(|d| BlockDevice {
-                        name: d.name,
-                        size_bytes: d.size,
-                        model: d.model,
-                        transport: d.tran,
-                        serial: d.serial,
-                        read_only: d.ro,
+                    .map(|d| {
+                        let by_id = get_by_id_path(&d.name);
+                        BlockDevice {
+                            name: d.name,
+                            size_bytes: d.size,
+                            model: d.model,
+                            transport: d.tran,
+                            serial: d.serial,
+                            by_id,
+                            read_only: d.ro,
+                        }
                     })
                     .collect()
             } else {
@@ -274,6 +292,41 @@ fn get_block_devices() -> Vec<BlockDevice> {
             vec![]
         }
     }
+}
+
+fn get_by_id_path(dev_name: &str) -> Option<String> {
+    let by_id_dir = Path::new("/dev/disk/by-id");
+    if let Ok(entries) = fs::read_dir(by_id_dir) {
+        let mut candidates = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(target) = fs::canonicalize(&path) {
+                if let Some(filename) = target.file_name() {
+                    if filename == dev_name {
+                        let link_name = path.file_name().unwrap().to_string_lossy().to_string();
+                        // Ignore partition links (e.g. nvme-xxx-part1)
+                        if !link_name.contains("-part") {
+                            candidates.push(path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Prioritize nvme- or ata- or scsi- over wwn-
+        candidates.sort_by_key(|c| {
+            if c.contains("/nvme-") {
+                0
+            } else if c.contains("/ata-") {
+                1
+            } else if c.contains("/scsi-") {
+                2
+            } else {
+                3
+            }
+        });
+        return candidates.into_iter().next();
+    }
+    None
 }
 
 fn get_network_devices() -> Vec<NetworkDevice> {

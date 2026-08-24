@@ -38,7 +38,7 @@ in
 
                 dataDir = lib.mkOption {
                   type = lib.types.str;
-                  default = "registries/${name}";
+                  default = ".cluster/registries/${name}";
                   description = "Local path for registry storage.";
                 };
 
@@ -103,7 +103,10 @@ in
             regName: regCfg:
             lib.nameValuePair regCfg.containerName {
               command = ''
-                docker run \
+                ENGINE=$(command -v docker 2>/dev/null || command -v podman 2>/dev/null || echo "/opt/homebrew/bin/podman")
+                mkdir -p "$PWD/${regCfg.dataDir}"
+                "$ENGINE" rm -f "${regCfg.containerName}" 2>/dev/null || true
+                "$ENGINE" run \
                   --rm \
                   --name ${regCfg.containerName} \
                   --dns 8.8.8.8 \
@@ -126,7 +129,10 @@ in
         webserverProc = optionalAttrs cfg.webserver.enable {
           "${cfg.webserver.containerName}" = {
             command = ''
-              docker run \
+              ENGINE=$(command -v docker 2>/dev/null || command -v podman 2>/dev/null || echo "/opt/homebrew/bin/podman")
+              mkdir -p "$PWD/${cfg.webserver.patchesDir}"
+              "$ENGINE" rm -f "${cfg.webserver.containerName}" 2>/dev/null || true
+              "$ENGINE" run \
                 --rm \
                 --name ${cfg.webserver.containerName} \
                 -p ${toString cfg.webserver.localPort}:80 \

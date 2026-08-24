@@ -28,7 +28,7 @@
 
           config =
             let
-              patchesDir = "patches";
+              patchesDir = ".cluster/patches";
             in
             {
               services = {
@@ -70,17 +70,8 @@
                   enable = true;
                   dataDir = patchesDir;
                   kubelib = kubelib;
-                  # you can pass this an attr set or raw yaml
-                  dynamicPatch = ''
-                    machine:
-                      registries:
-                        config:
-                          ghcr.io:
-                            auth:
-                              auth: "base64encodedcredentials"
-                      time:
-                        bootTimeout: 2m
-                  '';
+                  # Optional developer escape hatch: accepts a native Nix attrset or raw YAML string
+                  dynamicPatch = { };
                   webserverHost = "${config.services.containers."lab".webserver.host}:${
                     builtins.toString config.services.containers."lab".webserver.localPort
                   }";
@@ -90,9 +81,9 @@
                 talos.cluster = {
                   enable = true;
                   provisioner = "docker";
-                  dataDir = "talos/";
+                  dataDir = ".cluster/talos/";
                   workers = {
-                    count = 3;
+                    count = 2;
                     cpus = "2.0";
                     memory = "2Gib";
                   };
@@ -124,16 +115,16 @@
 
                 local-path-storage."storage" = {
                   enable = true;
-                  kubeconfig = "talos/kubeconfig";
+                  kubeconfig = ".cluster/talos/kubeconfig";
                 };
 
                 tilt = {
                   tilt = {
                     enable = true;
-                    dataDir = "postgres";
+                    dataDir = ".cluster/postgres";
                     runtimeInputs = [ ];
                     environment = {
-                      KUBECONFIG = "talos/kubeconfig";
+                      KUBECONFIG = ".cluster/talos/kubeconfig";
                       NIX_CONFIG = "experimental-features = nix-command flakes";
                       NIX_PATH = "nixpkgs=${pkgs.path}";
                     };

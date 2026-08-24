@@ -15,12 +15,7 @@ let
 
   cfg = config;
 
-  traefik = lib.aivLab.mkPatchTraefik {
-    inherit pkgs;
-    kubelib = config.kubelib;
-  };
-
-  # Import con_shell patch generators
+  # Import patch generators
   cilium_patch = import ../talos/patches/cilium.nix {
     inherit pkgs;
     kubelib = config.kubelib;
@@ -45,8 +40,8 @@ let
       (pkgs.formats.yaml { }).generate "dynamic-patch.yaml" cfg.dynamicPatch;
   hasDynamicPatch = cfg.dynamicPatch != { } && cfg.dynamicPatch != [ ] && cfg.dynamicPatch != "";
 
-  generateDevPatchesScript = pkgs.writeShellApplication {
-    name = "generate-dev-patches";
+  generatePatchesScript = pkgs.writeShellApplication {
+    name = "generate-patches";
     text = ''
       set -euo pipefail
 
@@ -60,7 +55,6 @@ let
       cp -f "${cilium_loader}" "${cfg.dataDir}/cilium-loader.yaml"
       cp -f "${cilium_patch}" "${cfg.dataDir}/cilium.yaml"
       cp -f "${ghcr_patch}" "${cfg.dataDir}/ghcr.yaml"
-      cp -f "${traefik}" "${cfg.dataDir}/traefik.yaml"
       printf "\n✅ Development patches created\n"
       ls -1 ${cfg.dataDir}
     '';
@@ -129,7 +123,7 @@ in
   config = mkIf config.enable {
     outputs.settings.processes = {
       "patches" = {
-        command = "${generateDevPatchesScript}/bin/generate-dev-patches";
+        command = "${generatePatchesScript}/bin/generate-patches";
       };
     };
   };

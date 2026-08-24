@@ -4,79 +4,19 @@
   ip,
   machines,
   inspector,
-  wipe ? false,
+  generatePatches ? null,
 }:
 let
   lib = pkgs.lib;
-  generatePatches = (import ../talos { inherit pkgs lib inputs; }).mkGeneratePatches {
+  resolvedGeneratePatches = if generatePatches != null then generatePatches else (import ../talos { inherit pkgs lib inputs; }).mkGeneratePatches {
+    coordinatorIp = ip;
     webserverHost = "http://${ip}:8080/configs";
   };
-  message = if wipe then "WIPING ALL DATA" else "Booting inspector...";
-  # cmdline = if wipe then "talos.platform=metal" else "talos.platform=metal"; # Placeholder if needed
 
-  wipeScript = pkgs.writeText "wipe.ipxe" ''
+  bootScript = pkgs.writeText "boot.ipxe" ''
     #!ipxe
-    dhcp
-    echo ${message}
-    kernel tftp://${ip}/default/bzImage init=${inspector.toplevel}/init loglevel=4
-    initrd tftp://${ip}/default/initrd
-    boot
+    chain http://${ip}:8080/boot.ipxe?mac=''${net0/mac}
   '';
-
-  bootScript =
-    if wipe then
-      wipeScript
-    else
-      let
-        macCases = lib.concatStringsSep "\n" (
-          lib.concatMap (
-            m:
-            lib.mapAttrsToList (
-              _name: iface:
-              let
-                normalizedMac = lib.toLower iface.mac;
-              in
-              "iseq \${net0/mac} ${normalizedMac} && goto ${m.name} ||"
-            ) m.machine.network-interfaces
-          ) machines
-        );
-
-        machineBlocks = lib.concatMapStringsSep "\n" (m:
-          if (m.wipe or (m.machine.wipe or false)) then ''
-            :${m.name}
-            echo "WIPING DATA FOR ${m.name}..."
-            kernel tftp://${ip}/default/bzImage init=${inspector.toplevel}/init loglevel=4 inspector.server=http://${ip}:8080
-            initrd tftp://${ip}/default/initrd
-            boot
-          '' else ''
-            :${m.name}
-            echo Booting ${m.name}...
-            kernel tftp://${ip}/${m.name}/vmlinuz talos.config=http://${ip}:8080/configs/${m.name}.yaml talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1 module.sig_enforce=1
-            initrd tftp://${ip}/${m.name}/initrd
-            boot
-          ''
-        ) machines;
-      in
-      pkgs.writeText "boot.ipxe" ''
-        #!ipxe
-        dhcp
-        echo "Booting Talos nodes..."
-
-        # Route by MAC address
-        ${macCases}
-
-        # Fallback — unknown MAC
-        echo Unknown machine: ''${net0/mac}
-        goto default
-
-        ${machineBlocks}
-
-        :default
-          echo Booting default...
-          kernel tftp://${ip}/default/bzImage init=${inspector.toplevel}/init initrd=initrd inspector.server=http://${ip}:8080 loglevel=4
-          initrd tftp://${ip}/default/initrd
-          boot
-      '';
   emptySyslinux = pkgs.runCommand "empty-syslinux" { } ''
     mkdir -p "$out/share/syslinux"
   '';
@@ -124,8 +64,12 @@ in
   "d /var/lib/tftpboot/default 0755 root root -"
   "L+ /var/lib/tftpboot/default/bzImage - - - - ${inspector.kernel}/bzImage"
   "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector.netbootRamdisk}/initrd"
+  "L+ /var/lib/tftpboot/default/netboot.ipxe - - - - ${inspector.netbootIpxeScript}/netboot.ipxe"
   "d /var/lib/tftpboot/configs 0755 root root -"
-  "L+ /var/lib/tftpboot/configs/generate-patches - - - - ${generatePatches}"
+  "L+ /var/lib/tftpboot/configs/generate-patches - - - - ${resolvedGeneratePatches}"
+  "d /var/lib/coordinator/talos 0755 root root -"
+  "Z /var/lib/coordinator/talos 0755 root root -"
+  "z /var/lib/coordinator/talos/* 0644 root root -"
 ]
 # Per-machine kernel + initrd + configScript directories
 ++ (lib.concatMap (m: [

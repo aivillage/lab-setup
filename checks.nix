@@ -1,9 +1,9 @@
+{ inputs, ... }:
 {
   perSystem =
     {
       pkgs,
       lib,
-      inputs,
       ...
     }:
     let
@@ -36,7 +36,8 @@
       };
 
       generatePatches = talos.mkGeneratePatches {
-        modelStorePath = "/models";
+        coordinatorIp = "10.200.10.12";
+        nfsPath = "/data";
       };
 
       # Build the DHCP hosts text and assert expected format.

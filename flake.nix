@@ -10,11 +10,22 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # for dual DGX Spark machines
+    dgx-spark = {
+      url = "github:graham33/nixos-dgx-spark";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # For the development environment
     process-compose-flake.url = "github:Platonic-Systems/process-compose-flake";
 
     services-flake = {
       url = "github:juspay/services-flake";
+    };
+
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     flake-parts.url = "github:hercules-ci/flake-parts";
@@ -24,12 +35,16 @@
     inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
+        inputs.process-compose-flake.flakeModule
+        ./process-compose
+        ./flakeModules/cluster.nix
         ./devShells
         ./checks.nix
-        ./packages/inspector.nix
-        ./packages/inspector-api.nix
-        ./packages/inspector-iso.nix
-        ./packages/inspector-netboot.nix
+        ./packages/inspector
+        ./packages/inspector/iso.nix
+        ./packages/inspector/netboot.nix
+        ./packages/cluster-cli/package.nix
+        ./packages/aarch64-installer-iso.nix
       ];
 
       systems = [
@@ -57,14 +72,46 @@
         };
 
       flake = {
-        lib = args@{ pkgs ? null, ... }: {
-          talos = import ./talos/default.nix ({ inherit inputs; lib = inputs.nixpkgs.lib; } // args);
+        lib = {
+          keys = import ./keys.nix;
+
+          mkCluster = args@{ pkgs, ... }:
+            (import ./talos/default.nix { inherit inputs pkgs; lib = inputs.nixpkgs.lib; }).mkCluster args;
+
+          mkClusterDevShell = args@{ pkgs, ... }:
+            (import ./talos/default.nix { inherit inputs pkgs; lib = inputs.nixpkgs.lib; }).mkClusterDevShell args;
         };
 
-
-
         nixosModules = {
-          inspector-api = ./nixosModules/inspector-api.nix;
+          base = { ... }: {
+            imports = [
+              ./nixosModules/base.nix
+              inputs.sops-nix.nixosModules.sops
+            ];
+            _module.args.inputs = inputs;
+          };
+          shell = ./nixosModules/shell.nix;
+          admin = ./nixosModules/admin.nix;
+          secrets = { ... }: {
+            imports = [
+              ./nixosModules/secrets.nix
+              inputs.sops-nix.nixosModules.sops
+            ];
+          };
+
+          aarch64-installer-iso = { modulesPath, lib, pkgs, ... }: {
+            imports = [
+              "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
+            ];
+            
+            users.users.root.openssh.authorizedKeys.keys = lib.mkDefault [ ];
+
+            environment.systemPackages = with pkgs; [
+              git
+              htop
+              gptfdisk
+            ];
+          };
 
           inspector = { ... }: {
             imports = [ ./nixosModules/inspector.nix ];
@@ -100,8 +147,17 @@
             ]);
           };
 
-          pxe = {
-            imports = [ ./nixosModules/cnc.nix ];
+          spark-base = { ... }: {
+            imports = [
+              inputs.dgx-spark.nixosModules.dgx-spark
+            ];
+            nixpkgs.overlays = [
+              inputs.dgx-spark.overlays.fixes
+            ];
+          };
+
+          coordinator = {
+            imports = [ ./nixosModules/coordinator.nix ];
             _module.args.inputs = inputs;
             _module.args.inspector = (inputs.nixpkgs.lib.nixosSystem {
               system = "x86_64-linux";

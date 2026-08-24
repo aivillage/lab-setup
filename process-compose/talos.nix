@@ -116,6 +116,31 @@ let
         echo "Sudo does not require a password. Proceeding..."
       ''}
 
+      # Auto-detect container engine socket if DOCKER_HOST is unset
+      if [ -z "''${DOCKER_HOST:-}" ]; then
+        if [ -S "/var/run/docker.sock" ]; then
+          export DOCKER_HOST="unix:///var/run/docker.sock"
+        elif [ -n "''${HOME:-}" ] && [ -S "$HOME/.docker/run/docker.sock" ]; then
+          export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
+        elif [ -n "''${HOME:-}" ] && [ -S "$HOME/.local/share/containers/podman/machine/podman.sock" ]; then
+          export DOCKER_HOST="unix://$HOME/.local/share/containers/podman/machine/podman.sock"
+        else
+          # On macOS, check temporary folders for active Podman machine API socket
+          PODMAN_API_SOCK=$(/bin/sh -c 'ls /var/folders/*/*/*/podman/*-api.sock 2>/dev/null | head -n 1' || echo "")
+          if [ -n "$PODMAN_API_SOCK" ] && [ -S "$PODMAN_API_SOCK" ]; then
+            export DOCKER_HOST="unix://$PODMAN_API_SOCK"
+          else
+            PODMAN_BIN=$(command -v podman 2>/dev/null || echo "/opt/homebrew/bin/podman")
+            if [ -x "$PODMAN_BIN" ]; then
+              PODMAN_SOCK=$("$PODMAN_BIN" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null || "$PODMAN_BIN" info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || echo "")
+              if [ -n "$PODMAN_SOCK" ] && [ -S "$PODMAN_SOCK" ]; then
+                export DOCKER_HOST="unix://$PODMAN_SOCK"
+              fi
+            fi
+          fi
+        fi
+      fi
+
       # Create required directories
       echo "Creating the following directory: $PWD/${config.dataDir}"
       mkdir -p "${config.dataDir}"
@@ -146,6 +171,30 @@ let
   cleanupScript = ''
     # Don't exit on error during cleanup
     set +e
+
+    if [ -z "''${DOCKER_HOST:-}" ]; then
+      if [ -S "/var/run/docker.sock" ]; then
+        export DOCKER_HOST="unix:///var/run/docker.sock"
+      elif [ -n "''${HOME:-}" ] && [ -S "$HOME/.docker/run/docker.sock" ]; then
+        export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
+      elif [ -n "''${HOME:-}" ] && [ -S "$HOME/.local/share/containers/podman/machine/podman.sock" ]; then
+        export DOCKER_HOST="unix://$HOME/.local/share/containers/podman/machine/podman.sock"
+      else
+        # On macOS, check temporary folders for active Podman machine API socket
+        PODMAN_API_SOCK=$(/bin/sh -c 'ls /var/folders/*/*/*/podman/*-api.sock 2>/dev/null | head -n 1' || echo "")
+        if [ -n "$PODMAN_API_SOCK" ] && [ -S "$PODMAN_API_SOCK" ]; then
+          export DOCKER_HOST="unix://$PODMAN_API_SOCK"
+        else
+          PODMAN_BIN=$(command -v podman 2>/dev/null || echo "/opt/homebrew/bin/podman")
+          if [ -x "$PODMAN_BIN" ]; then
+            PODMAN_SOCK=$("$PODMAN_BIN" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null || "$PODMAN_BIN" info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || echo "")
+            if [ -n "$PODMAN_SOCK" ] && [ -S "$PODMAN_SOCK" ]; then
+              export DOCKER_HOST="unix://$PODMAN_SOCK"
+            fi
+          fi
+        fi
+      fi
+    fi
 
     echo "Destroying Talos cluster '${config.clusterName}'..."
 
