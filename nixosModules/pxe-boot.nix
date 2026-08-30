@@ -73,9 +73,11 @@ in
   "z /var/lib/coordinator/talos/* 0644 root root -"
 ]
 # Per-machine kernel + initrd + configScript directories
-++ (lib.concatMap (m: [
-  "d /var/lib/tftpboot/${m.name} 0755 root root -"
-  "L+ /var/lib/tftpboot/${m.name}/vmlinuz - - - - ${m.image}/vmlinuz"
-  "L+ /var/lib/tftpboot/${m.name}/initrd - - - - ${m.image}/initrd"
-  "L+ /var/lib/tftpboot/configs/${m.name}.yaml - - - - ${m.configScript}"
-]) machines)
+++ (lib.concatMap (m:
+  if (m ? name && m ? image && m ? configScript) then [
+    "d /var/lib/tftpboot/${m.name} 0755 root root -"
+    "L+ /var/lib/tftpboot/${m.name}/vmlinuz - - - - ${m.image}/vmlinuz"
+    "L+ /var/lib/tftpboot/${m.name}/initrd - - - - ${m.image}/initrd"
+    "L+ /var/lib/tftpboot/configs/${m.name}.yaml - - - - ${m.configScript}"
+  ] else [ ]
+) machines)

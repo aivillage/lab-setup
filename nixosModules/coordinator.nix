@@ -25,30 +25,30 @@
   config,
   lib,
   pkgs,
-  inspector,
-  inputs ? { },
+  inputs ? null,
+  inspector ? null,
+  lab ? null,
   cluster ? null,
-  clusterLib ? null,
   ...
 }:
 
 let
   cfg = config.lab.coordinator;
 
-  # Determine default host IP from cluster, networking interfaces, or fallback to null
+  # Determine default host IP from lab, networking interfaces, or fallback to null
   detectedIp =
-    if cluster != null && cluster ? lab && cluster.lab ? coordinator && cluster.lab.coordinator ? ip then
-      cluster.lab.coordinator.ip
+    if lab != null && lab ? coordinator && lab.coordinator ? ip then
+      lab.coordinator.ip
     else
       let
         addrs = lib.concatMap (i: map (a: a.address) i.ipv4.addresses) (lib.attrValues (config.networking.interfaces or { }));
       in
       if addrs != [ ] then lib.head addrs else null;
 
-  # Determine default primary interface name with static IP or from cluster
+  # Determine default primary interface name with static IP or from lab
   detectedInterface =
-    if cluster != null && cluster ? lab && cluster.lab ? coordinator && cluster.lab.coordinator ? interface then
-      cluster.lab.coordinator.interface
+    if lab != null && lab ? coordinator && lab.coordinator ? interface then
+      lab.coordinator.interface
     else
       let
         ifaces = lib.filterAttrs (_name: iface: (iface.ipv4.addresses or [ ]) != [ ]) (config.networking.interfaces or { });
@@ -56,10 +56,10 @@ let
       in
       if names != [ ] then lib.head names else null;
 
-  # Determine default gateway from cluster or system networking
+  # Determine default gateway from lab or system networking
   detectedGateway =
-    if cluster != null && cluster ? lab && cluster.lab ? gateway then
-      cluster.lab.gateway
+    if lab != null && lab ? gateway then
+      lab.gateway
     else
       let gw = config.networking.defaultGateway or null; in
       if gw != null then (if lib.isAttrs gw then gw.address else gw) else null;
@@ -67,7 +67,11 @@ let
   gatewayIp = cfg.gateway;
 
   rawMachines = if (lib.isAttrs cfg.machines && cfg.machines ? machines) then cfg.machines.machines else cfg.machines;
-  machinesList = if lib.isAttrs rawMachines then lib.attrValues rawMachines else rawMachines;
+  machinesList =
+    if lib.isAttrs rawMachines then
+      lib.mapAttrsToList (name: m: (m.machine or m) // { inherit name; }) rawMachines
+    else
+      rawMachines;
 
   # Build dnsmasq address entries dynamically for each machine's network interfaces
   # Format: /<hostname>.<domain>/<ip> (e.g. /control.cluster.local/10.200.10.211)
@@ -75,9 +79,16 @@ let
     m:
     let
       mCfg = m.machine or m;
+      name = mCfg.name or m.name or "unknown";
       netIfaces = mCfg.network-interfaces or mCfg.networkInterfaces or { };
     in
-    lib.mapAttrsToList (_ifaceName: ifaceCfg: "/${mCfg.name or m.name}.${cfg.domain}/${ifaceCfg.ip}") netIfaces
+    lib.concatMap (
+      ifaceCfg:
+      if ifaceCfg ? ip && ifaceCfg.ip != null then
+        [ "/${name}.${cfg.domain}/${ifaceCfg.ip}" ]
+      else
+        [ ]
+    ) (lib.attrValues netIfaces)
   ) machinesList;
 
   pxeBootFiles = import ./pxe-boot.nix {
@@ -107,7 +118,9 @@ in
     domain = lib.mkOption {
       type = lib.types.str;
       default =
-        if cluster != null && cluster ? lab && cluster.lab ? domain then
+        if lab != null && lab ? domain then
+          lab.domain
+        else if cluster != null && cluster ? lab && cluster.lab ? domain then
           cluster.lab.domain
         else if (config.networking.domain or null) != null then
           config.networking.domain
@@ -130,7 +143,13 @@ in
 
     machines = lib.mkOption {
       type = lib.types.either (lib.types.listOf lib.types.attrs) (lib.types.attrsOf lib.types.attrs);
-      default = if clusterLib != null && clusterLib ? machines then clusterLib.machines else { };
+      default =
+        if cluster != null && cluster ? talos && cluster.talos ? machines then
+          cluster.talos.machines
+        else if cluster != null && cluster ? machines then
+          cluster.machines
+        else
+          { };
       description = "List or attribute set of Talos machine definitions";
     };
 
@@ -147,23 +166,15 @@ in
     };
 
     privateSubnet = lib.mkOption {
-      type = lib.types.str;
-      default =
-        if cluster != null && cluster ? lab && cluster.lab ? subnets && cluster.lab.subnets ? private then
-          cluster.lab.subnets.private
-        else
-          "10.200.10.0/24";
-      description = "Private infrastructure cluster subnet";
+      type = lib.types.nullOr lib.types.str;
+      default = if lab != null && lab ? subnets && lab.subnets ? private then lab.subnets.private else null;
+      description = "Private management subnet CIDR";
     };
 
     publicSubnet = lib.mkOption {
-      type = lib.types.str;
-      default =
-        if cluster != null && cluster ? lab && cluster.lab ? subnets && cluster.lab.subnets ? public then
-          cluster.lab.subnets.public
-        else
-          "10.200.20.0/24";
-      description = "Public workshop subnet";
+      type = lib.types.nullOr lib.types.str;
+      default = if lab != null && lab ? subnets && lab.subnets ? public then lab.subnets.public else null;
+      description = "Public ingress subnet CIDR";
     };
 
     dhcpRange = lib.mkOption {
@@ -174,7 +185,7 @@ in
 
     generatePatches = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
-      default = if clusterLib != null && clusterLib ? generatePatches then clusterLib.generatePatches else null;
+      default = null;
       description = "The generated generate-patches script package from the cluster configuration";
     };
   };
@@ -192,6 +203,14 @@ in
       {
         assertion = cfg.interface != null && cfg.interface != "";
         message = "lab.coordinator: Could not auto-detect primary network interface. Please set `lab.coordinator.interface` explicitly.";
+      }
+      {
+        assertion = cfg.privateSubnet != null && cfg.privateSubnet != "";
+        message = "lab.coordinator: Private management subnet is missing. Please define `lab.subnets.private` in lab.nix.";
+      }
+      {
+        assertion = cfg.publicSubnet != null && cfg.publicSubnet != "";
+        message = "lab.coordinator: Public ingress subnet is missing. Please define `lab.subnets.public` in lab.nix.";
       }
     ];
 

@@ -1,4 +1,4 @@
-{ config, lib, pkgs, cluster ? null, ... }:
+{ config, lib, pkgs, lab ? null, ... }:
 
 let
   cfg = config.lab.admin;
@@ -19,8 +19,8 @@ in
 
     authorizedKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = if cluster != null then (cluster.lab.authorizedKeys or [ ]) else [ ];
-      description = "List of SSH authorized public keys.";
+      default = if lab != null then (lab.authorizedKeys or [ ]) else [ ];
+      description = "List of SSH public keys authorized for the admin user (inherits from lab.authorizedKeys).";
     };
   };
 
