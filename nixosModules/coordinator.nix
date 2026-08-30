@@ -37,8 +37,8 @@ let
 
   # Determine default host IP from cluster, networking interfaces, or fallback to null
   detectedIp =
-    if cluster != null && cluster ? network && cluster.network ? coordinator && cluster.network.coordinator ? ip then
-      cluster.network.coordinator.ip
+    if cluster != null && cluster ? lab && cluster.lab ? coordinator && cluster.lab.coordinator ? ip then
+      cluster.lab.coordinator.ip
     else
       let
         addrs = lib.concatMap (i: map (a: a.address) i.ipv4.addresses) (lib.attrValues (config.networking.interfaces or { }));
@@ -47,8 +47,8 @@ let
 
   # Determine default primary interface name with static IP or from cluster
   detectedInterface =
-    if cluster != null && cluster ? network && cluster.network ? primaryInterface then
-      cluster.network.primaryInterface
+    if cluster != null && cluster ? lab && cluster.lab ? coordinator && cluster.lab.coordinator ? interface then
+      cluster.lab.coordinator.interface
     else
       let
         ifaces = lib.filterAttrs (_name: iface: (iface.ipv4.addresses or [ ]) != [ ]) (config.networking.interfaces or { });
@@ -58,8 +58,8 @@ let
 
   # Determine default gateway from cluster or system networking
   detectedGateway =
-    if cluster != null && cluster ? network && cluster.network ? gateway then
-      cluster.network.gateway
+    if cluster != null && cluster ? lab && cluster.lab ? gateway then
+      cluster.lab.gateway
     else
       let gw = config.networking.defaultGateway or null; in
       if gw != null then (if lib.isAttrs gw then gw.address else gw) else null;
@@ -107,8 +107,8 @@ in
     domain = lib.mkOption {
       type = lib.types.str;
       default =
-        if cluster != null && cluster ? network && cluster.network ? domain then
-          cluster.network.domain
+        if cluster != null && cluster ? lab && cluster.lab ? domain then
+          cluster.lab.domain
         else if (config.networking.domain or null) != null then
           config.networking.domain
         else
@@ -124,7 +124,7 @@ in
 
     proxyDhcp = lib.mkOption {
       type = lib.types.bool;
-      default = false;
+      default = true;
       description = "Enable dnsmasq ProxyDHCP mode (coexist with external DHCP like Ubiquiti)";
     };
 
@@ -148,13 +148,21 @@ in
 
     privateSubnet = lib.mkOption {
       type = lib.types.str;
-      default = if cluster != null && cluster ? network && cluster.network ? subnets && cluster.network.subnets ? private then cluster.network.subnets.private else "10.200.10.0/24";
+      default =
+        if cluster != null && cluster ? lab && cluster.lab ? subnets && cluster.lab.subnets ? private then
+          cluster.lab.subnets.private
+        else
+          "10.200.10.0/24";
       description = "Private infrastructure cluster subnet";
     };
 
     publicSubnet = lib.mkOption {
       type = lib.types.str;
-      default = if cluster != null && cluster ? network && cluster.network ? subnets && cluster.network.subnets ? public then cluster.network.subnets.public else "10.200.20.0/24";
+      default =
+        if cluster != null && cluster ? lab && cluster.lab ? subnets && cluster.lab.subnets ? public then
+          cluster.lab.subnets.public
+        else
+          "10.200.20.0/24";
       description = "Public workshop subnet";
     };
 
@@ -200,6 +208,20 @@ in
       "8.8.8.8"
     ];
 
+    boot.kernel.sysctl = {
+      "net.ipv4.ip_forward" = 1;
+      "net.ipv6.conf.all.forwarding" = 1;
+      "net.ipv4.conf.all.rp_filter" = 2;
+      "net.ipv4.conf.default.rp_filter" = 2;
+    } // (lib.optionalAttrs (cfg.interface != null) {
+      "net.ipv4.conf.${cfg.interface}.rp_filter" = 2;
+    });
+
+    networking.firewall.trustedInterfaces = lib.filter (x: x != null) [
+      cfg.interface
+      "tailscale0"
+    ];
+
     nixpkgs.config.allowUnsupportedSystem = true;
 
     environment.systemPackages = [
@@ -237,6 +259,10 @@ in
         echo -e "   \033[1;38;2;137;196;162mjournalctl -u coordinator -f\033[0m            \033[38;2;152;166;177m→\033[0m Stream live Coordinator logs\n"
       fi
     '';
+
+    environment.variables = {
+      CLUSTER_CONTROL_VIP = if cluster != null && cluster ? vip && cluster.vip ? ip then cluster.vip.ip else "";
+    };
 
     # Open firewall ports for TFTP, DNS, DHCP, and HTTP
     networking.firewall = {

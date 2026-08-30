@@ -49,9 +49,10 @@ def atomic_save_text(path: Path, text: str):
     """Safely writes text to disk atomically using a temporary file."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = path.with_suffix(".tmp")
-        tmp_file.write_text(text, encoding="utf-8")
-        os.replace(tmp_file, path)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=str(path.parent), delete=False) as tf:
+            tf.write(text)
+            tmp_path = Path(tf.name)
+        os.replace(tmp_path, path)
     except Exception as e:
         print(f"[ERROR] Failed to atomically write {path}: {e}", flush=True)
 
@@ -81,153 +82,153 @@ def get_flake_machines() -> dict:
         print(f"[WARN] Failed to parse FLAKE_MACHINES_JSON: {e}", flush=True)
         return {}
 
-def find_node_by_target(wipe_data: dict, target: str, flake_machines: dict = None) -> tuple:
-    """
-    Multi-key resolver: finds a node in wipe_data by name, primary MAC, secondary MAC, or IP.
-    Returns (primary_mac_key, node_entry_dict) or (None, None).
-    """
-    if not target or not isinstance(wipe_data, dict):
-        return None, None
-
-    clean_target = normalize_mac(target)
-
-    # 1. Direct primary MAC key match
-    for k, v in wipe_data.items():
-        if k.startswith("wipe_") or not isinstance(v, dict):
-            continue
-        if k == target or (clean_target and normalize_mac(k) == clean_target):
-            return k, v
-
-    # 2. Match by logical node name
-    for k, v in wipe_data.items():
-        if k.startswith("wipe_") or not isinstance(v, dict):
-            continue
-        if v.get("name") == target:
-            return k, v
-
-    # 3. Match by any secondary MAC or PXE IP
-    for k, v in wipe_data.items():
-        if k.startswith("wipe_") or not isinstance(v, dict):
-            continue
-        pmacs = [normalize_mac(m) for m in v.get("macs", []) if isinstance(m, str)]
-        if clean_target and clean_target in pmacs:
-            return k, v
-        if v.get("pxe_ip") == target:
-            return k, v
-
-    # 4. Check Flake machines mapping
-    if flake_machines is None:
-        flake_machines = get_flake_machines()
-    if flake_machines and target in flake_machines:
-        fspec = flake_machines[target]
-        fmacs = fspec.get("macs", [])
-        if fmacs:
-            pmac = format_mac(fmacs[0])
-            if pmac in wipe_data:
-                return pmac, wipe_data[pmac]
-
-    return None, None
-
-def sync_wipe_data_with_flake(wipe_data=None) -> dict:
-    """
-    Ensures wipe.json is keyed by canonical primary MAC.
-    Migrates legacy name-keyed entries and merges Flake declared node specs.
-    """
-    flake_machines = get_flake_machines()
-
-    if wipe_data is None:
-        if WIPE_FILE.exists():
-            try:
-                wipe_data = json.loads(WIPE_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                wipe_data = {"wipe_all_known": False}
-        else:
-            wipe_data = {"wipe_all_known": False}
-
-    if not isinstance(wipe_data, dict):
-        wipe_data = {"wipe_all_known": False}
-
-    # Step 1: Migrate any legacy non-MAC keys in wipe_data
-    migrated = {}
-    for k, v in wipe_data.items():
-        if k == "wipe_all_known":
-            migrated[k] = v
-            continue
-        if not isinstance(v, dict):
-            continue
-
-        clean_k = normalize_mac(k)
-        if len(clean_k) == 12:
-            # Key is already a MAC
-            formatted_k = format_mac(clean_k)
-            migrated[formatted_k] = v
-        else:
-            # Key is a node name (e.g. "control", "worker1")
-            node_name = k
-            mac_list = v.get("macs", [])
-            primary_mac = format_mac(mac_list[0]) if mac_list else ""
-            if not primary_mac and node_name in flake_machines:
-                fmacs = flake_machines[node_name].get("macs", [])
-                if fmacs:
-                    primary_mac = format_mac(fmacs[0])
-
-            if primary_mac:
-                v["name"] = node_name
-                migrated[primary_mac] = v
-            else:
-                migrated[k] = v
-
-    wipe_data = migrated
-
-    # Step 2: Merge Flake-declared machines into MAC-keyed records
-    for fname, fspec in flake_machines.items():
-        if not isinstance(fspec, dict):
-            continue
-        fmacs = fspec.get("macs", [])
-        if not fmacs:
-            continue
-
-        primary_mac = format_mac(fmacs[0])
-        all_fmacs = [format_mac(m) for m in fmacs]
-
-        if primary_mac not in wipe_data:
-            wipe_data[primary_mac] = {
-                "name": fname,
-                "known": True,
-                "macs": all_fmacs,
-                "pxe_ip": None,
-                "pxe_mac": primary_mac,
-                "wipe": {
-                    "requested": False,
-                    "status": "NONE",
-                    "timestamp": None,
-                    "log": None,
-                }
-            }
-        else:
-            wipe_data[primary_mac]["name"] = fname
-            wipe_data[primary_mac]["known"] = True
-            if not wipe_data[primary_mac].get("macs"):
-                wipe_data[primary_mac]["macs"] = all_fmacs
-
-    return wipe_data
-
 def get_wipe_data() -> dict:
-    """Reads wipe.json from disk, synchronizes keys, and returns state dict."""
-    wipe_data = {"wipe_all_known": False}
+    """Reads wipe.json from disk and returns clean dict keyed strictly by normalized MAC."""
+    wipe_data = {}
     if WIPE_FILE.exists():
         try:
-            wipe_data = json.loads(WIPE_FILE.read_text(encoding="utf-8"))
+            raw = json.loads(WIPE_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for k, v in raw.items():
+                    if isinstance(v, dict):
+                        clean_k = normalize_mac(k)
+                        if len(clean_k) == 12:
+                            formatted_k = format_mac(clean_k)
+                            # Handle both flat and nested wipe structures
+                            wspec = v.get("wipe", {}) if isinstance(v.get("wipe"), dict) else v
+                            wipe_data[formatted_k] = {
+                                "requested": bool(wspec.get("requested", False)),
+                                "status": str(wspec.get("status", "NONE")),
+                                "timestamp": wspec.get("timestamp"),
+                                "log": wspec.get("log"),
+                                "pxe_ip": v.get("pxe_ip") or wspec.get("pxe_ip"),
+                                "installed": bool(v.get("installed", False)),
+                                "installed_at": v.get("installed_at"),
+                            }
         except Exception as e:
             print(f"[WARN] Failed to parse {WIPE_FILE}: {e}", flush=True)
-
-    wipe_data = sync_wipe_data_with_flake(wipe_data)
-    atomic_save_json(WIPE_FILE, wipe_data)
     return wipe_data
 
 def save_wipe_data(data: dict):
-    """Safely writes wipe_data dict to WIPE_FILE atomically."""
+    """Atomically writes wipe_data dict to WIPE_FILE."""
     atomic_save_json(WIPE_FILE, data)
+
+def get_discovered_nodes() -> list:
+    """Parses all inspector reports in INSPECTOR_DIR to list discovered nodes."""
+    nodes = []
+    seen_macs = set()
+    for report_path in sorted(INSPECTOR_DIR.glob("*.yaml")):
+        if "wipe-log" in report_path.name:
+            continue
+        try:
+            payload = report_path.read_text(encoding="utf-8")
+            # 1. Extract reported primary_mac, primary_ip, and primary_iface
+            pmac_match = re.search(r'primary_mac:\s*["\']?([0-9a-fA-F:]{17})["\']?', payload)
+            reported_pmac = normalize_mac(pmac_match.group(1)) if pmac_match else None
+            pip_match = re.search(r'primary_ip:\s*["\']?([0-9.]+)', payload)
+            reported_pip = pip_match.group(1).strip() if pip_match else None
+            pif_match = re.search(r'primary_iface:\s*["\']?([^\s"\']+)', payload)
+            reported_pif = pif_match.group(1).strip() if pif_match else None
+
+            # 2. Extract all MACs, filter loopback/null/broadcast, and deduplicate
+            raw_macs = re.findall(r'(?:mac|address):\s*["\']?([0-9a-fA-F:]{17})["\']?', payload)
+            clean_macs = []
+            for m in raw_macs:
+                norm = normalize_mac(m)
+                if norm and norm not in ("000000000000", "ffffffffffff") and norm not in clean_macs:
+                    clean_macs.append(norm)
+
+            if not clean_macs:
+                continue
+
+            if any(m in seen_macs for m in clean_macs):
+                continue
+            seen_macs.update(clean_macs)
+
+            # 3. Determine primary MAC
+            primary_clean = reported_pmac if reported_pmac in clean_macs else clean_macs[0]
+            # Ensure primary MAC is at the head of the list
+            ordered_clean = [primary_clean] + [m for m in clean_macs if m != primary_clean]
+
+            primary_mac = format_mac(primary_clean)
+            mac_suffix = primary_clean[-6:] if len(primary_clean) >= 6 else "unknown"
+            node_name = f"node-{mac_suffix}"
+            nodes.append({
+                "name": node_name,
+                "primary_mac": primary_mac,
+                "pxe_ip": reported_pip or "-",
+                "iface": reported_pif or "-",
+                "macs": [format_mac(m) for m in ordered_clean],
+            })
+        except Exception:
+            pass
+    return nodes
+
+def resolve_target_macs(target: str, flake_machines: dict, discovered_nodes: list) -> list:
+    """
+    Resolves a target name, 'all', or MAC address into a list of verified MAC strings.
+    Strictly forbids blind wipes on unverified arbitrary MACs.
+    """
+    target = (target or "").strip()
+    if not target:
+        return []
+
+    # 1. Target "all": Collect all declared nodes in flake_machines, or all discovered nodes
+    if target in ("all", "all_known"):
+        resolved = []
+        for fname, fspec in flake_machines.items():
+            if isinstance(fspec, dict) and fspec.get("macs"):
+                resolved.append(format_mac(fspec["macs"][0]))
+        if not resolved:
+            for d in discovered_nodes:
+                resolved.append(d["primary_mac"])
+        return list(set(resolved))
+
+    # 2. Match declared flake machine name
+    if target in flake_machines:
+        fspec = flake_machines[target]
+        if isinstance(fspec, dict) and fspec.get("macs"):
+            return [format_mac(fspec["macs"][0])]
+
+    # 3. Match discovered node name (e.g. node-3302)
+    for d in discovered_nodes:
+        if d["name"] == target:
+            return [d["primary_mac"]]
+
+    # 4. Match direct MAC (only if it belongs to a declared machine or discovered node)
+    clean_target = normalize_mac(target)
+    if len(clean_target) == 12:
+        for fname, fspec in flake_machines.items():
+            if isinstance(fspec, dict):
+                fmacs = [normalize_mac(m) for m in fspec.get("macs", [])]
+                if clean_target in fmacs:
+                    return [format_mac(fspec["macs"][0])]
+        for d in discovered_nodes:
+            dmacs = [normalize_mac(m) for m in d.get("macs", [])]
+            if clean_target in dmacs:
+                return [d["primary_mac"]]
+
+    return []
+
+def prune_secondary_mac_keys(wipe_data: dict, canonical_mac: str, flake_machines: dict, discovered_nodes: list):
+    """Prunes non-canonical MAC keys belonging to the same physical node as canonical_mac."""
+    clean_target = normalize_mac(canonical_mac)
+    all_node_macs = []
+    for d in discovered_nodes:
+        d_clean = [normalize_mac(m) for m in d.get("macs", [])]
+        if clean_target in d_clean:
+            all_node_macs = [format_mac(m) for m in d_clean]
+            break
+    if not all_node_macs and flake_machines:
+        for fname, fspec in flake_machines.items():
+            if isinstance(fspec, dict):
+                f_clean = [normalize_mac(m) for m in fspec.get("macs", [])]
+                if clean_target in f_clean:
+                    all_node_macs = [format_mac(m) for m in f_clean]
+                    break
+    for m in all_node_macs:
+        if m != canonical_mac and m in wipe_data:
+            del wipe_data[m]
 
 # ==============================================================================
 # DYNAMIC MACHINES.NIX GENERATOR
@@ -242,6 +243,7 @@ def generate_machines_nix() -> bytes:
 
     entries = []
     discovered_nodes_list = []
+    seen_names = set()
     seen_macs = set()
 
     for report_path in sorted(INSPECTOR_DIR.glob("*.yaml")):
@@ -261,9 +263,8 @@ def generate_machines_nix() -> bytes:
                 devices = [(f"enp{idx+3}s0", m) for idx, m in enumerate(macs)]
 
             macs = [normalize_mac(d[1]) for d in devices]
-            if not macs or macs[0] in seen_macs:
+            if not macs or any(m in seen_macs for m in macs):
                 continue
-            seen_macs.add(macs[0])
 
             # 2. Match host against Flake-declared machines
             resolved_name = None
@@ -289,6 +290,11 @@ def generate_machines_nix() -> bytes:
                 mac_suffix = macs[0][-6:] if len(macs[0]) >= 6 else "unknown"
                 resolved_name = f"node-{mac_suffix}"
 
+            if resolved_name in seen_names:
+                continue
+            seen_names.add(resolved_name)
+            seen_macs.update(macs)
+
             # 3. Parse active IPs and primary interface reported by Inspector
             ip_map = {}
             primary_iface_reported = ""
@@ -305,16 +311,21 @@ def generate_machines_nix() -> bytes:
 
                 ifaces_m = re.search(r'interfaces:\s*\n([\s\S]*?)(?=\n\w+:|$)', net_header.group(1))
                 if ifaces_m:
-                    blocks = re.findall(r'-\s+iface:\s*([^\s\n]+)[\s\S]*?mac:\s*([^\s\n]*)[\s\S]*?ips:\s*([^\s\n]*)', ifaces_m.group(1))
-                    for ifname, ifmac, ifips in blocks:
-                        cleaned_ips = [ip.strip() for ip in ifips.split(",") if ip.strip()]
-                        ip_map[ifname] = cleaned_ips
-                        if ifmac:
-                            ip_map[normalize_mac(ifmac)] = cleaned_ips
+                    raw_ifaces = re.split(r'\n(?=\s*-\s+iface:)', ifaces_m.group(1))
+                    for b in raw_ifaces:
+                        name_m = re.search(r'iface:\s*([^\s\n]+)', b)
+                        mac_m = re.search(r'mac:\s*([^\s\n]+)', b)
+                        ips_m = re.search(r'ips:\s*([^\n]*)', b)
+                        if name_m:
+                            ifname = name_m.group(1).strip()
+                            raw_ips_str = ips_m.group(1).strip() if ips_m else ""
+                            cleaned_ips = [ip.strip() for ip in raw_ips_str.split(",") if ip.strip()]
+                            ip_map[ifname] = cleaned_ips
+                            if mac_m and mac_m.group(1).strip():
+                                ip_map[normalize_mac(mac_m.group(1).strip())] = cleaned_ips
 
             # 4. Check active PXE MAC recorded during boot
-            pmac_key, node_wdata = find_node_by_target(wipe_data, resolved_name, flake_machines)
-            target_pxe_mac = normalize_mac(node_wdata.get("pxe_mac", "")) if isinstance(node_wdata, dict) else None
+            target_pxe_mac = None
 
             def get_subnet_prefix(env_var: str) -> str:
                 subnet = os.environ.get(env_var, "")
@@ -361,16 +372,19 @@ def generate_machines_nix() -> bytes:
 
                 if iface_name == chosen_primary_iface:
                     role = "private"
-                    primary = "true"
-                else:
+                elif is_public:
                     role = "public"
-                    primary = "false"
+                else:
+                    role = "disabled"
 
-                iface_lines.append(f"      {iface_name} = {{\n        mac = \"{formatted_mac}\";\n        role = \"{role}\";\n        primary = {primary};\n      }};")
+                iface_lines.append(f"      {iface_name} = {{\n        mac = \"{formatted_mac}\";\n        role = \"{role}\";\n      }};")
 
             # 5. Check NVIDIA GPU presence
             has_nvidia = any(k in payload.lower() for k in ["nvidia", "geforce", "rtx", "cuda", "tesla", "a100", "h100"])
             nvidia_val = "true" if has_nvidia else "false"
+
+            # 5b. Parse TPM 2.0 Presence
+            tpm_present = ("tpm:" in payload and "present: true" in payload) or "psp" in payload.lower()
 
             # 6. Parse Block Devices
             block_devs = []
@@ -395,10 +409,18 @@ def generate_machines_nix() -> bytes:
             # Sort: smaller drives first, NVMe preferred over SATA, alphabetical tie-breaker
             block_devs.sort(key=lambda d: (d["size_bytes"], 0 if d["transport"] == "nvme" else 1, d["name"]))
 
+            tpm_present_str = "true" if tpm_present else "false"
+
             if block_devs:
                 os_dev = block_devs[0]
                 os_path = os_dev["by_id"] if os_dev["by_id"] else f"/dev/{os_dev['name']}"
-                disk_lines = [f'    osDisk = "{os_path}";']
+                disk_lines = [
+                    "    osDisk = {",
+                    f'      device = "{os_path}";',
+                    f"      encrypted = {tpm_present_str};",
+                    '      provider = "nodeId";',
+                    "    };",
+                ]
                 if len(block_devs) > 1:
                     disk_lines.append("    # Discovered secondary storage disks (unpartitioned for Kubernetes storage):")
                     for sdev in block_devs[1:]:
@@ -408,13 +430,20 @@ def generate_machines_nix() -> bytes:
                         disk_lines.append(f"    # - {spath} ({s_gb:.1f} GB{model_str})")
                 disk_block = "\n".join(disk_lines)
             else:
-                disk_block = '    osDisk = "/dev/nvme0n1";'
+                disk_block = """    osDisk = {
+      device = "/dev/nvme0n1";
+      encrypted = false;
+      provider = "nodeId";
+    };"""
 
             ifaces_body = "\n".join(iface_lines)
             entry = f"""  {resolved_name} = {{
     controlPlane = {is_control_plane};
 {disk_block}
     nvidia = {nvidia_val};
+    tpm = {{
+      present = {tpm_present_str};
+    }};
     network-interfaces = {{
 {ifaces_body}
     }};
@@ -424,15 +453,19 @@ def generate_machines_nix() -> bytes:
                 "name": resolved_name,
                 "controlPlane": is_control_plane == "true",
                 "nvidia": has_nvidia,
+                "tpm": {
+                    "present": tpm_present,
+                },
                 "macs": [format_mac(m) for m in macs],
             })
         except Exception as e:
-            print(f"[WARN] Failed to parse report {report_path}: {e}", flush=True)
+            print(f"[ERROR] Failed to parse {report_path}: {e}", flush=True)
 
-    content = "# Auto-generated discovered cluster machines definition\n# Generated by Inspector & Coordinator (imported by cluster.nix via `machines = import ./machines.nix;`):\n{\n" + "\n\n".join(entries) + "\n}\n"
-    atomic_save_text(nix_file, content)
+    # Format into Nix attribute set syntax
+    nix_body = "{\n" + "\n\n".join(entries) + "\n}\n" if entries else "{\n}\n"
+    atomic_save_text(nix_file, nix_body)
     atomic_save_json(nodes_json_file, {"nodes": discovered_nodes_list})
-    return content.encode("utf-8")
+    return nix_body.encode("utf-8")
 
 # ==============================================================================
 # UNIFIED HTTP REQUEST HANDLER
@@ -471,20 +504,17 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             target = query_params.get("node", query_params.get("hostname", [""]))[0]
             wipe_data = get_wipe_data()
             flake_machines = get_flake_machines()
+            discovered = get_discovered_nodes()
+
+            target_macs = resolve_target_macs(target, flake_machines, discovered) if target else []
+            target_mac = target_macs[0] if target_macs else (format_mac(target) if len(normalize_mac(target)) == 12 else target)
 
             log_path = None
-            pmac_key, entry = find_node_by_target(wipe_data, target, flake_machines)
-            if entry and entry.get("wipe", {}).get("log"):
-                log_path = entry["wipe"]["log"]
-            elif pmac_key:
-                clean_mac = pmac_key.replace(":", "-")
+            if target_mac in wipe_data and wipe_data[target_mac].get("log"):
+                log_path = wipe_data[target_mac]["log"]
+            elif target_mac:
+                clean_mac = target_mac.replace(":", "-")
                 for p in sorted(WIPE_LOGS_DIR.glob(f"*{clean_mac}*.log"), reverse=True):
-                    log_path = str(p)
-                    break
-
-            if not log_path and target:
-                clean_t = target.replace(":", "-")
-                for p in sorted(WIPE_LOGS_DIR.glob(f"*{clean_t}*.log"), reverse=True):
                     log_path = str(p)
                     break
 
@@ -507,6 +537,8 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             return
 
         if self.path.startswith("/api/reports"):
+            if not self._require_local_auth("Inspection report reading"):
+                return
             parsed_url = urlparse(self.path)
             query_params = parse_qs(parsed_url.query)
             target = query_params.get("node", query_params.get("hostname", [""]))[0]
@@ -516,28 +548,19 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     target = subpath
 
             if target:
-                wipe_data = get_wipe_data()
                 flake_machines = get_flake_machines()
-                pmac_key, entry = find_node_by_target(wipe_data, target, flake_machines)
+                discovered = get_discovered_nodes()
+                target_macs = resolve_target_macs(target, flake_machines, discovered)
+                clean_targets = [m.replace(":", "-") for m in target_macs] if target_macs else []
+                clean_targets.append(target.replace(".yaml", "").replace("inspector-report-", "").replace(":", "-"))
 
                 target_file = None
-                if pmac_key:
-                    clean_mac = pmac_key.replace(":", "-")
-                    for filepath in sorted(INSPECTOR_DIR.glob("*.yaml")):
-                        if "wipe-log" in filepath.name:
-                            continue
-                        if clean_mac in filepath.name:
-                            target_file = filepath
-                            break
-
-                if not target_file:
-                    clean_t = target.replace(".yaml", "").replace("inspector-report-", "").replace(":", "-")
-                    for filepath in sorted(INSPECTOR_DIR.glob("*.yaml")):
-                        if "wipe-log" in filepath.name:
-                            continue
-                        if clean_t in filepath.name:
-                            target_file = filepath
-                            break
+                for filepath in sorted(INSPECTOR_DIR.glob("*.yaml")):
+                    if "wipe-log" in filepath.name:
+                        continue
+                    if any(ct in filepath.name for ct in clean_targets if ct):
+                        target_file = filepath
+                        break
 
                 if target_file and target_file.exists():
                     self._send_text(200, target_file.read_text(encoding="utf-8", errors="replace"), content_type="text/yaml")
@@ -559,11 +582,15 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             return
 
         if self.path in ("/api/discovered/machines.nix", "/api/discovered/nix"):
+            if not self._require_local_auth("Hardware discovery"):
+                return
             content = generate_machines_nix()
             self._send_text(200, content.decode("utf-8"))
             return
 
         if self.path == "/api/discovered":
+            if not self._require_local_auth("Hardware discovery"):
+                return
             disc_json = INSPECTOR_DIR / "discovered-nodes.json"
             if disc_json.exists():
                 try:
@@ -585,6 +612,10 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             self._handle_post_wipe()
             return
 
+        if self.path in ("/api/installed", "/api/mark-installed"):
+            self._handle_post_installed()
+            return
+
         if self.path == "/api/purge":
             self._handle_purge()
             return
@@ -599,8 +630,28 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
 
         self._send_json(404, {"error": "Not Found"})
 
+    def _is_local_client(self) -> bool:
+        """Returns True if request originates from localhost/loopback (local CLI or SSH session)."""
+        client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else ""
+        return client_ip in ("127.0.0.1", "::1", "localhost")
+
+    def _require_local_auth(self, action_name: str) -> bool:
+        """Enforces that administrative actions strictly originate from localhost/SSH."""
+        if not self._is_local_client():
+            client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else "unknown"
+            print(f"[SECURITY] Blocked remote {action_name} request from unauthorized IP: {client_ip}", flush=True)
+            self._send_json(403, {
+                "error": "Forbidden",
+                "message": f"{action_name} operations must originate from localhost via an SSH agent-authenticated session."
+            })
+            return False
+        return True
+
     def _handle_purge(self):
-        """Purges all inspector reports, wipe states, logs, and generated Talos state files."""
+        """Purges all inspector reports, wipe states, logs, and generated Talos state files (Localhost / SSH only)."""
+        if not self._require_local_auth("Cluster purge"):
+            return
+
         count = 0
         for p in list(INSPECTOR_DIR.glob("*")):
             try:
@@ -634,8 +685,12 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_api_status(self):
+        if not self._require_local_auth("Cluster status inspection"):
+            return
+
         wipe_data = get_wipe_data()
         flake_machines = get_flake_machines()
+
         self._send_json(200, {
             "coordinator_host": os.environ.get("HOSTNAME", "coordinator"),
             "dns_ip": os.environ.get("DNS_IP", "127.0.0.1"),
@@ -644,18 +699,58 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             "public_subnet": os.environ.get("PUBLIC_SUBNET", ""),
             "flake_machines": list(flake_machines.keys()),
             "flake_specs": flake_machines,
+            "discovered_nodes": get_discovered_nodes(),
             "wipe_data": wipe_data
         })
 
+    def _handle_post_installed(self):
+        """Allows setting or toggling node installed state via POST /api/installed (Localhost / SSH-authenticated only)."""
+        if not self._require_local_auth("Installed state management"):
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+        try:
+            req = json.loads(body)
+        except Exception:
+            req = {}
+
+        target = req.get("target", "all")
+        installed = bool(req.get("installed", True))
+        wipe_data = get_wipe_data()
+        flake_machines = get_flake_machines()
+        discovered_nodes = get_discovered_nodes()
+        iso_now = datetime.now(timezone.utc).isoformat()
+
+        target_macs = resolve_target_macs(target, flake_machines, discovered_nodes)
+        if not target_macs:
+            self._send_json(400, {
+                "error": "Bad Request",
+                "message": f"Target '{target}' is not a declared node in machines.nix or a discovered bare-metal node."
+            })
+            return
+
+        for mac in target_macs:
+            if mac not in wipe_data:
+                wipe_data[mac] = {
+                    "requested": False,
+                    "status": "NONE",
+                    "timestamp": None,
+                    "log": None,
+                    "installed": False,
+                    "installed_at": None,
+                }
+            wipe_data[mac]["installed"] = installed
+            wipe_data[mac]["installed_at"] = iso_now if installed else None
+            if installed:
+                wipe_data[mac]["requested"] = False
+
+        save_wipe_data(wipe_data)
+        self._send_json(200, {"status": "success", "target": target, "resolved_macs": target_macs, "installed": installed})
+
     def _handle_post_wipe(self):
         """Allows toggling wipe requests via POST /api/wipe (Localhost / SSH-authenticated only)."""
-        client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else ""
-        if client_ip not in ("127.0.0.1", "::1", "localhost"):
-            print(f"[SECURITY] Blocked remote /api/wipe request from unauthorized IP: {client_ip}", flush=True)
-            self._send_json(403, {
-                "error": "Forbidden",
-                "message": "Destructive wipe operations must originate from localhost via an SSH agent-authenticated session."
-            })
+        if not self._require_local_auth("Destructive storage wipe"):
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
@@ -670,51 +765,45 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         explicit_status = req.get("status", None)
         wipe_data = get_wipe_data()
         flake_machines = get_flake_machines()
+        discovered_nodes = get_discovered_nodes()
         iso_now = datetime.now(timezone.utc).isoformat()
 
-        if target in ("all", "all_known"):
-            if requested is not None:
-                wipe_data["wipe_all_known"] = requested
-            for k, v in wipe_data.items():
-                if k.startswith("wipe_") or not isinstance(v, dict):
-                    continue
-                if "wipe" not in v or not isinstance(v["wipe"], dict):
-                    v["wipe"] = {}
-                if requested is not None:
-                    v["wipe"]["requested"] = requested
-                if explicit_status:
-                    v["wipe"]["status"] = explicit_status
-                else:
-                    v["wipe"]["status"] = "PENDING" if (requested if requested is not None else False) else "NONE"
-                v["wipe"]["timestamp"] = iso_now
-        else:
-            pmac_key, entry = find_node_by_target(wipe_data, target, flake_machines)
-            if pmac_key and entry:
-                if "wipe" not in entry or not isinstance(entry["wipe"], dict):
-                    entry["wipe"] = {}
-                if requested is not None:
-                    entry["wipe"]["requested"] = requested
-                if explicit_status:
-                    entry["wipe"]["status"] = explicit_status
-                else:
-                    entry["wipe"]["status"] = "PENDING" if (requested if requested is not None else False) else "NONE"
-                entry["wipe"]["timestamp"] = iso_now
-            elif normalize_mac(target):
-                f_mac = format_mac(target)
-                wipe_data[f_mac] = {
-                    "name": None,
-                    "known": False,
-                    "macs": [f_mac],
-                    "wipe": {
-                        "requested": requested if requested is not None else False,
-                        "status": explicit_status or ("PENDING" if requested else "NONE"),
-                        "timestamp": iso_now,
-                        "log": None,
-                    }
+        target_macs = resolve_target_macs(target, flake_machines, discovered_nodes)
+        if not target_macs:
+            self._send_json(400, {
+                "error": "Bad Request",
+                "message": f"Target '{target}' is not a declared node in machines.nix or a discovered bare-metal node."
+            })
+            return
+
+        for mac in target_macs:
+            if mac not in wipe_data:
+                wipe_data[mac] = {
+                    "requested": False,
+                    "status": "NONE",
+                    "timestamp": None,
+                    "log": None,
+                    "installed": False,
+                    "installed_at": None,
                 }
+            if requested is not None:
+                wipe_data[mac]["requested"] = requested
+                if requested:
+                    wipe_data[mac]["installed"] = False
+            if explicit_status:
+                wipe_data[mac]["status"] = explicit_status
+            else:
+                wipe_data[mac]["status"] = "PENDING" if (requested if requested is not None else False) else "NONE"
+            wipe_data[mac]["timestamp"] = iso_now
 
         save_wipe_data(wipe_data)
-        self._send_json(200, {"status": "success", "target": target, "wipe_requested": requested, "node_status": explicit_status})
+        self._send_json(200, {
+            "status": "success",
+            "target": target,
+            "resolved_macs": target_macs,
+            "wipe_requested": requested,
+            "node_status": explicit_status
+        })
 
     def _handle_boot_ipxe(self):
         parsed_url = urlparse(self.path)
@@ -726,103 +815,103 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         wipe_data = get_wipe_data()
         flake_machines = get_flake_machines()
         iso_now = datetime.now(timezone.utc).isoformat()
-        client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else None
 
-        # Resolve node identity in MAC-keyed wipe_data
-        pmac_key, node_entry = find_node_by_target(wipe_data, mac, flake_machines)
-
-        if not pmac_key:
-            pmac_key = formatted_req_mac
-            node_entry = {
-                "name": None,
-                "known": False,
-                "discovered": iso_now,
-                "macs": [formatted_req_mac],
-                "pxe_ip": client_ip,
-                "pxe_mac": formatted_req_mac,
-                "wipe": {
-                    "requested": False,
-                    "status": "NONE",
-                    "timestamp": None,
-                    "log": None,
-                }
-            }
-            wipe_data[pmac_key] = node_entry
-        else:
-            node_entry["pxe_ip"] = client_ip or node_entry.get("pxe_ip")
-            node_entry["pxe_mac"] = formatted_req_mac
-
-        # Determine node declared name
-        name = node_entry.get("name")
-        if not name and flake_machines:
+        # Check if MAC is declared in machines.nix
+        declared_name = None
+        is_control_plane = False
+        is_nvidia = False
+        if flake_machines:
             for fname, fspec in flake_machines.items():
-                if not isinstance(fspec, dict):
-                    continue
-                fmacs = [normalize_mac(m) for m in fspec.get("macs", [])]
-                if clean_req_mac in fmacs:
-                    name = fname
-                    node_entry["name"] = fname
-                    node_entry["known"] = True
-                    break
+                if isinstance(fspec, dict):
+                    fmacs = [normalize_mac(m) for m in fspec.get("macs", [])]
+                    if clean_req_mac in fmacs:
+                        declared_name = fname
+                        is_control_plane = bool(fspec.get("controlPlane"))
+                        is_nvidia = bool(fspec.get("nvidia"))
+                        break
 
-        if not name:
-            mac_suffix = clean_req_mac[-6:] if clean_req_mac else "unknown"
-            name = f"node-{mac_suffix}"
+        is_declared = declared_name is not None
+        name = declared_name or f"node-{clean_req_mac[-6:] if clean_req_mac else 'unknown'}"
+        vmlinuz_path = Path("/var/lib/tftpboot") / name / "vmlinuz"
 
-        # Check wipe request
-        wspec = node_entry.get("wipe", {}) if isinstance(node_entry.get("wipe"), dict) else {}
-        should_wipe = bool(wspec.get("requested") or wspec.get("status") == "IN_PROGRESS" or wipe_data.get("wipe_all_known"))
+        discovered_nodes = get_discovered_nodes()
+        target_macs = resolve_target_macs(clean_req_mac, flake_machines, discovered_nodes)
+        canonical_mac = target_macs[0] if target_macs else formatted_req_mac
+
+        prune_secondary_mac_keys(wipe_data, canonical_mac, flake_machines, discovered_nodes)
+
+        # Check wipe request for this MAC
+        wentry = wipe_data.get(canonical_mac, {})
+        should_wipe = wentry.get("requested", False) or wentry.get("status") == "IN_PROGRESS"
+
+        if should_wipe:
+            boot_target = "Inspector (Wipe)"
+        elif not is_declared or not vmlinuz_path.exists():
+            boot_target = "Inspector (Discover)"
+        else:
+            boot_target = "Talos"
 
         dns_ip_env = os.environ.get("DNS_IP", "127.0.0.1")
         host_header = self.headers.get("Host", dns_ip_env)
         server_ip = host_header.split(":")[0] if host_header else dns_ip_env
-        vmlinuz_path = Path("/var/lib/tftpboot") / name / "vmlinuz"
+        if server_ip in ("127.0.0.1", "localhost") and dns_ip_env not in ("127.0.0.1", "localhost"):
+            server_ip = dns_ip_env
 
-        if should_wipe:
-            node_entry["wipe"]["status"] = "IN_PROGRESS"
-            node_entry["wipe"]["timestamp"] = iso_now
-            save_wipe_data(wipe_data)
+        client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else None
 
+        if canonical_mac not in wipe_data:
+            wipe_data[canonical_mac] = {
+                "requested": should_wipe,
+                "status": "IN_PROGRESS" if should_wipe else "NONE",
+                "timestamp": iso_now,
+                "log": None,
+                "pxe_ip": client_ip,
+                "installed": False,
+                "installed_at": None,
+            }
+        else:
+            if client_ip:
+                wipe_data[canonical_mac]["pxe_ip"] = client_ip
+            if should_wipe:
+                wipe_data[canonical_mac]["status"] = "IN_PROGRESS"
+                wipe_data[canonical_mac]["timestamp"] = iso_now
+                wipe_data[canonical_mac]["installed"] = False
+        save_wipe_data(wipe_data)
+
+        if boot_target == "Inspector (Wipe)":
             ipxe_script = f"""#!ipxe
 echo
 echo ========================================================================
-echo  STORAGE WIPE | WIPING STORAGE DISKS ({name})
+echo  STORAGE WIPE | SANITIZING LOCAL STORAGE ({name})
 echo ========================================================================
 echo   MAC Address : {formatted_req_mac}
-echo   Action      : STORAGE WIPE REQUESTED
-echo   Status      : IN_PROGRESS (READ-WRITE WIPE RAMDISK LOADING)
+echo   Target Host : {name}
+echo   Coordinator : {server_ip}:{PORT}
+echo   Action      : BOOTING INTO INSPECTOR RAMDISK TO WIPE LOCAL DISKS
 echo ========================================================================
 echo
 sleep 3
 set cmdline coordinator.server=http://{server_ip}:{PORT} inspector.server=http://{server_ip}:{PORT} inspector.wipe=1
 chain http://{server_ip}/default/netboot.ipxe
 """
-        elif not node_entry.get("known") or not vmlinuz_path.exists():
-            save_wipe_data(wipe_data)
+        elif boot_target == "Inspector (Discover)":
             ipxe_script = f"""#!ipxe
 echo
 echo ========================================================================
-echo  HARDWARE DISCOVERY | UNKNOWN NODE REPORTING ({name})
+echo  AI VILLAGE HARDWARE INSPECTOR | STATELESS DISCOVERY ({name})
 echo ========================================================================
 echo   MAC Address : {formatted_req_mac}
-echo   Status      : UNKNOWN (MAC NOT DECLARED IN MACHINES.NIX)
-echo   Safety      : READ-ONLY HARDWARE REPORTING (DISKS SAFE)
+echo   Status      : UNREGISTERED / HARDWARE DISCOVERY
+echo   Coordinator : {server_ip}:{PORT}
+echo   Action      : BOOTING INTO INSPECTOR RAMDISK TO REPORT HARDWARE
 echo ========================================================================
 echo
 sleep 2
-set cmdline coordinator.server=http://{server_ip}:{PORT} inspector.server=http://{server_ip}:{PORT} inspector.wipe=0
+set cmdline coordinator.server=http://{server_ip}:{PORT} inspector.server=http://{server_ip}:{PORT}
 chain http://{server_ip}/default/netboot.ipxe
 """
-        else:
-            save_wipe_data(wipe_data)
-            node_role = "WORKER"
-            is_nvidia = False
-            f_spec = flake_machines.get(name, {})
-            if isinstance(f_spec, dict):
-                if f_spec.get("controlPlane"):
-                    node_role = "CONTROL PLANE"
-                is_nvidia = f_spec.get("nvidia", False)
-
+        else: # Talos
+            node_role = "CONTROL PLANE" if is_control_plane else "WORKER"
             role_desc = f"{node_role} (nvidia = true)" if is_nvidia else node_role
             ramdisk_desc = "TALOS OS + NVIDIA GPU DRIVERS (506 MB)" if is_nvidia else "TALOS OS KERNEL & INITRAMFS (103 MB)"
             config_url = f"http://{server_ip}:{PORT}/configs/{name}.yaml"
@@ -830,7 +919,7 @@ chain http://{server_ip}/default/netboot.ipxe
             ipxe_script = f"""#!ipxe
 echo
 echo ========================================================================
-echo  TALOS OS | BARE-METAL KUBERNETES BOOT ({name})
+echo  TALOS OS | BARE-METAL KUBERNETES INSTALL ({name})
 echo ========================================================================
 echo   Role        : {role_desc}
 echo   MAC Address : {formatted_req_mac}
@@ -849,16 +938,44 @@ echo Network transfer interrupted. Retrying in 2 seconds...
 sleep 2
 goto boot_loop
 """
-
         self._send_text(200, ipxe_script)
 
     def _handle_configs(self):
         conf_name = os.path.basename(self.path)
-        conf_path = CONFIGS_DIR / conf_name
+        is_age_req = conf_name.endswith(".age")
+        target_conf = conf_name[:-4] if is_age_req else conf_name
+        node_key = target_conf.replace(".yaml", "")
+
+        conf_path = CONFIGS_DIR / target_conf
         content = None
 
-        if conf_name == "talosconfig" and (TALOS_DIR / "talosconfig").exists():
-            content = (TALOS_DIR / "talosconfig").read_bytes()
+        # Check if requested config is a shared patch/manifest (e.g. cilium.yaml, cni.yaml)
+        gen_patches = CONFIGS_DIR / "generate-patches" / "bin" / "generate-patches"
+        if not (conf_path.exists() and conf_path.is_dir() and (conf_path / "bin" / "generate-config").exists()):
+            if gen_patches.exists():
+                try:
+                    TALOS_DIR.mkdir(parents=True, exist_ok=True)
+                    subprocess.run([str(gen_patches), str(TALOS_DIR)], capture_output=True, text=True, cwd=str(TALOS_DIR))
+                    for candidate in [TALOS_DIR / target_conf, TALOS_DIR / "addons" / target_conf, TALOS_DIR / "base-patches" / target_conf]:
+                        if candidate.exists() and candidate.is_file():
+                            content = candidate.read_bytes()
+                            break
+                except Exception:
+                    pass
+
+            if content is not None:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/yaml; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+        # Declarative Gating: If the node is not declared in flake machines, reject with 404
+        flake_machines = get_flake_machines()
+        if not flake_machines or node_key not in flake_machines:
+            self._send_json(404, {"error": "Not Found", "message": f"Machine '{node_key}' is not declared in cluster machines."})
+            return
 
         if conf_path.exists() and conf_path.is_file():
             content = conf_path.read_bytes()
@@ -877,8 +994,8 @@ goto boot_loop
             res = subprocess.run([str(gen_bin), str(TALOS_DIR)] + secrets_arg, capture_output=True, text=True, cwd=str(TALOS_DIR))
 
             if res.returncode != 0:
-                print(f"[ERROR] generate-config failed for {conf_name} ({res.returncode}):\n{res.stderr}", flush=True)
-                err_msg = f"# ERROR: generate-config failed for {conf_name}\n# Exit code: {res.returncode}\n\n{res.stderr}".encode("utf-8")
+                print(f"[ERROR] generate-config failed for {target_conf} ({res.returncode}):\n{res.stderr}", flush=True)
+                err_msg = f"# ERROR: generate-config failed for {target_conf}\n# Exit code: {res.returncode}\n\n{res.stderr}".encode("utf-8")
                 self.send_response(500)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(err_msg)))
@@ -892,7 +1009,7 @@ goto boot_loop
                 except Exception:
                     pass
 
-            yaml_file = TALOS_DIR / conf_name
+            yaml_file = TALOS_DIR / target_conf
             if not yaml_file.exists():
                 for alt in [TALOS_DIR / "controlplane.yaml", TALOS_DIR / "worker.yaml"]:
                     if alt.exists():
@@ -903,34 +1020,15 @@ goto boot_loop
                 content = yaml_file.read_bytes()
             else:
                 print(f"[ERROR] Output config {yaml_file} not found: {res.stderr}", flush=True)
-        else:
-            gen_patches = CONFIGS_DIR / "generate-patches" / "bin" / "generate-patches"
-            if gen_patches.exists():
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    subprocess.run([str(gen_patches), tmpdir], capture_output=True, text=True, cwd=tmpdir)
-                    patch_file = Path(tmpdir) / conf_name
-                    if patch_file.exists():
-                        content = patch_file.read_bytes()
 
         if content is not None:
-            client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else None
-            node_key = conf_name.replace('.yaml', '')
-            if client_ip and node_key and not client_ip.startswith("100.") and client_ip not in ("127.0.0.1", "::1", "localhost"):
-                wd = get_wipe_data()
-                pmac, entry = find_node_by_target(wd, node_key)
-                if pmac and entry:
-                    if entry.get("pxe_ip") != client_ip:
-                        entry["pxe_ip"] = client_ip
-                        save_wipe_data(wd)
-
             self.send_response(200)
             self.send_header("Content-Type", "text/yaml")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
-            return
-
-        self._send_json(404, {"error": "Not Found"})
+        else:
+            self._send_json(404, {"error": "Not Found", "message": f"Config for '{target_conf}' could not be generated or found."})
 
     def _handle_wipelog(self):
         content_length = int(self.headers.get("Content-Length", 0))
@@ -953,34 +1051,45 @@ goto boot_loop
 
         wipe_data = get_wipe_data()
         flake_machines = get_flake_machines()
+        discovered_nodes = get_discovered_nodes()
 
-        target_mac = None
+        target_macs = []
         for m in clean_macs:
-            pmac, entry = find_node_by_target(wipe_data, m, flake_machines)
-            if pmac:
-                target_mac = pmac
+            resolved = resolve_target_macs(m, flake_machines, discovered_nodes)
+            if resolved:
+                target_macs = resolved
                 break
 
-        if not target_mac:
-            target_mac = format_mac(clean_macs[0]) if clean_macs else hostname
+        if not target_macs and hostname:
+            target_macs = resolve_target_macs(hostname, flake_machines, discovered_nodes)
+
+        target_mac = target_macs[0] if target_macs else (format_mac(clean_macs[0]) if clean_macs else hostname)
+
+        prune_secondary_mac_keys(wipe_data, target_mac, flake_machines, discovered_nodes)
 
         log_filename = f"wipe-{target_mac.replace(':', '-')}-{ts_str}.log"
         log_path = WIPE_LOGS_DIR / log_filename
         atomic_save_text(log_path, payload)
 
-        if target_mac in wipe_data and isinstance(wipe_data[target_mac], dict):
-            node_entry = wipe_data[target_mac]
-            if "wipe" not in node_entry or not isinstance(node_entry["wipe"], dict):
-                node_entry["wipe"] = {}
-            node_entry["wipe"]["requested"] = False
-            node_entry["wipe"]["status"] = "SUCCESS"
-            node_entry["wipe"]["timestamp"] = iso_now
-            node_entry["wipe"]["log"] = str(log_path)
-            save_wipe_data(wipe_data)
-            print(f"[WIPE] Updated {target_mac} ({node_entry.get('name')}) wipe status to SUCCESS in wipe.json", flush=True)
+        if target_mac not in wipe_data:
+            wipe_data[target_mac] = {
+                "requested": False,
+                "status": "NONE",
+                "timestamp": None,
+                "log": None,
+                "installed": False,
+                "installed_at": None,
+            }
 
-        print(f"[RECV] Saved wipe log to {log_path} for {target_mac}", flush=True)
-        self._send_json(200, {"status": "success", "log": str(log_path), "mac": target_mac})
+        wipe_data[target_mac]["requested"] = False
+        wipe_data[target_mac]["status"] = "SUCCESS"
+        wipe_data[target_mac]["timestamp"] = iso_now
+        wipe_data[target_mac]["log"] = str(log_path)
+        wipe_data[target_mac]["installed"] = False
+
+        save_wipe_data(wipe_data)
+        print(f"[WIPE] Saved wipe log for {target_mac} ({hostname}) to {log_path}", flush=True)
+        self._send_json(200, {"status": "SUCCESS", "log_file": str(log_path)})
 
     def _handle_reports(self):
         content_length = int(self.headers.get("Content-Length", 0))
@@ -1012,19 +1121,33 @@ goto boot_loop
         wipe_data = get_wipe_data()
         flake_machines = get_flake_machines()
 
-        target_mac = None
-        for m in clean_macs:
-            pmac, entry = find_node_by_target(wipe_data, m, flake_machines)
-            if pmac:
-                target_mac = pmac
-                break
+        # Determine target_mac from reported primary_mac, declared flake machine MACs, or first clean MAC
+        pmac_match = re.search(r'primary_mac:\s*["\']?([0-9a-fA-F:]{17})["\']?', payload)
+        reported_pmac = normalize_mac(pmac_match.group(1)) if pmac_match else None
 
-        if not target_mac:
-            target_mac = format_mac(clean_macs[0]) if clean_macs else hostname
+        target_mac = None
+        if reported_pmac:
+            target_mac = format_mac(reported_pmac)
+        elif clean_macs:
+            target_mac = format_mac(clean_macs[0])
+        else:
+            target_mac = hostname
 
         filename = f"inspector-report-{target_mac.replace(':', '-')}.yaml"
         filepath = INSPECTOR_DIR / filename
         atomic_save_text(filepath, payload)
+
+        # Remove any older reports for the same machine to prevent duplicates
+        clean_mac_set = set(clean_macs)
+        for old_path in INSPECTOR_DIR.glob("*.yaml"):
+            if "wipe-log" in old_path.name or old_path.name == filename:
+                continue
+            for cm in clean_mac_set:
+                if cm.replace(":", "-") in old_path.name:
+                    try:
+                        old_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         try:
             generate_machines_nix()
@@ -1032,24 +1155,15 @@ goto boot_loop
             print(f"[WARN] Failed to auto-generate machines.nix: {e}", flush=True)
 
         wipe_data = get_wipe_data()
-        node_spec = wipe_data.get(target_mac, {})
-        client_ip = self.client_address[0] if hasattr(self, 'client_address') and self.client_address else None
-
-        if isinstance(node_spec, dict):
-            if client_ip:
-                node_spec["pxe_ip"] = client_ip
-            if clean_macs:
-                node_spec["macs"] = [format_mac(m) for m in clean_macs]
-
         should_wipe = False
-        if isinstance(node_spec, dict):
-            wspec = node_spec.get("wipe", {}) if isinstance(node_spec.get("wipe"), dict) else {}
-            if wspec.get("requested", False) or wspec.get("status") == "IN_PROGRESS" or wipe_data.get("wipe_all_known"):
+        if target_mac in wipe_data:
+            wentry = wipe_data[target_mac]
+            if wentry.get("requested", False) or wentry.get("status") == "IN_PROGRESS":
                 should_wipe = True
-                wspec["status"] = "IN_PROGRESS"
+                wentry["status"] = "IN_PROGRESS"
                 save_wipe_data(wipe_data)
 
-        print(f"[RECV] Saved report for {target_mac} ({node_spec.get('name')}, wipe={should_wipe})", flush=True)
+        print(f"[RECV] Saved report for {target_mac} (wipe={should_wipe})", flush=True)
 
         self._send_json(200, {
             "status": "success",

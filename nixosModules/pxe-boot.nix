@@ -65,6 +65,7 @@ in
   "L+ /var/lib/tftpboot/default/bzImage - - - - ${inspector.kernel}/bzImage"
   "L+ /var/lib/tftpboot/default/initrd - - - - ${inspector.netbootRamdisk}/initrd"
   "L+ /var/lib/tftpboot/default/netboot.ipxe - - - - ${inspector.netbootIpxeScript}/netboot.ipxe"
+  "r /var/lib/tftpboot/configs/* - - - - -"
   "d /var/lib/tftpboot/configs 0755 root root -"
   "L+ /var/lib/tftpboot/configs/generate-patches - - - - ${resolvedGeneratePatches}"
   "d /var/lib/coordinator/talos 0755 root root -"

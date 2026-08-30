@@ -63,6 +63,49 @@ let
           }
         ) orderedIfaceNames;
 
+      tpmPresent = machine.tpm.present or false;
+      osDiskConfig = machine.osDisk or null;
+      osDiskEncrypted = if osDiskConfig != null then (osDiskConfig.encrypted or false) else false;
+      encryptionProvider = if osDiskConfig != null then (osDiskConfig.provider or "tpm") else "tpm";
+
+      encryptionConfig =
+        if osDiskEncrypted then
+          if encryptionProvider == "tpm" && tpmPresent then {
+            state = {
+              provider = "luks2";
+              keys = [
+                { nodeID = { }; }
+                {
+                  slot = 1;
+                  tpm = { };
+                }
+              ];
+            };
+            ephemeral = {
+              provider = "luks2";
+              keys = [
+                { nodeID = { }; }
+                {
+                  slot = 1;
+                  tpm = { };
+                }
+              ];
+            };
+          } else {
+            state = {
+              provider = "luks2";
+              keys = [
+                { nodeID = { }; }
+              ];
+            };
+            ephemeral = {
+              provider = "luks2";
+              keys = [
+                { nodeID = { }; }
+              ];
+            };
+          }
+        else { };
 
       patchObj = {
         machine = {
@@ -84,11 +127,11 @@ let
             image = installerImage;
             wipe = true;
           } // (
-            if (machine.osDisk or null) != null then { disk = machine.osDisk; }
+            if (osDiskConfig.device or null) != null then { disk = osDiskConfig.device; }
             else if (machine.diskSelector or null) != null then { diskSelector = machine.diskSelector; }
             else { diskSelector = { size = "< 1TB"; }; }
           );
-        };
+        } // (if encryptionConfig != { } then { systemDiskEncryption = encryptionConfig; } else { });
       };
     in
     pkgs.writeText "${machine.name}-machine-patch.yaml" (builtins.toJSON patchObj);

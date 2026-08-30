@@ -37,7 +37,7 @@
                       }
                       self.nixosModules.inspector-iso
                       {
-                        inspector.authorizedKeys = cfg.authorizedKeys or [ ];
+                        inspector.authorizedKeys = cfg.authorizedKeys or (import "${self}/keys.nix").all;
                       }
                     ];
                   };

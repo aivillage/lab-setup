@@ -20,13 +20,16 @@
                 }
                 (inputs.nixpkgs + "/nixos/modules/installer/netboot/netboot-minimal.nix")
                 inputs.self.nixosModules.inspector
-                ({ config, pkgs, ... }: {
-                  system.build.netbootIpxeScript = pkgs.writeTextDir "netboot.ipxe" ''
+                {
+                  inspector.authorizedKeys = (import ../../keys.nix).all;
+                }
+                ({ config, pkgs, lib, ... }: {
+                  system.build.netbootIpxeScript = lib.mkForce (pkgs.writeTextDir "netboot.ipxe" ''
                     #!ipxe
                     kernel bzImage init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams} ''${cmdline}
                     initrd initrd
                     boot
-                  '';
+                  '');
                 })
               ];
             };

@@ -35,8 +35,8 @@ In a standard cluster with GPU nodes, NVIDIA modules are automatically activated
 ```nix
 {
   name = "lab1";
-  coordinator = "spark2";
-  controlVip = "10.200.10.30";
+  coordinator = "coordinator";
+  controlVip = "10.200.10.30"; # Example VIP for VLAN 10 schema
 
   # Bare-Metal Operating System patches (supports built-in names AND local file paths!)
   talosModules = [
@@ -63,8 +63,8 @@ For a CPU-only cluster, omit NVIDIA modules completely:
 ```nix
 {
   name = "lab2";
-  coordinator = "spark2";
-  controlVip = "10.200.10.40";
+  coordinator = "coordinator";
+  controlVip = "10.200.10.30"; # Example VIP for VLAN 10 schema
 
   talosModules = [ "cluster-base" "kubelet-subnets" ];
   k8sModules   = [ "cilium" "apiserver-rbac" ];
@@ -80,7 +80,7 @@ If you are developing inside `lab1` and need to test a custom or experimental pa
 ```nix
 {
   name = "lab1";
-  coordinator = "spark2";
+  coordinator = "coordinator";
   controlVip = "10.200.10.30";
 
   # Local Module Overrides!
@@ -97,7 +97,7 @@ If you are developing inside `lab1` and need to test a custom or experimental pa
 }
 ```
 
-When `cluster gen talos` or `nixos-rebuild spark2` runs:
+When `cluster gen talos` or `nixos-rebuild coordinator` runs:
 1. `labsetup` checks `overrides."nvidia-gpu"`.
 2. Because it's defined, `labsetup` ignores the built-in patch and uses `./patches/custom-nvidia-kernel.yaml`!
 

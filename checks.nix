@@ -13,8 +13,8 @@
       # without needing real hardware config.
       testMachine = talos.machine {
         name = "test-node";
-        version = "v1.12.1";
-        sha256 = "sha256-5IgKMWkDa4/VkEvD/x7Tr+YebilFJQCk/UoPL7WW1BE=";
+        version = "v1.13.3";
+        sha256 = "sha256-G+f5ghwZAsY1nbXYcj4yawAIbOpBPAtfBI5ut+N6+6k=";
         schematicSha256 = "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ=";
         controlPlane = true;
         network-interfaces = {
@@ -30,7 +30,7 @@
         diskSelector = {
           size = 512110190592;
         };
-        nvidia = true;
+        nvidia = false;
         extraExtensions = [ ];
         extraPatches = [ ];
       };
@@ -71,7 +71,7 @@
 
         name="${testMachine.image.name}"
         echo "Image derivation name: $name"
-        if [[ "$name" != *"v1.12.1"* ]]; then
+        if [[ "$name" != *"v1.13.3"* ]]; then
           echo "FAIL: derivation name does not include version"
           exit 1
         fi
@@ -123,8 +123,8 @@
 
       testMachines = talos.machines {
         control = {
-          version = "v1.12.1";
-          sha256 = "sha256-5IgKMWkDa4/VkEvD/x7Tr+YebilFJQCk/UoPL7WW1BE=";
+          version = "v1.13.3";
+          sha256 = "sha256-G+f5ghwZAsY1nbXYcj4yawAIbOpBPAtfBI5ut+N6+6k=";
           schematicSha256 = "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ=";
           controlPlane = true;
           network-interfaces = {
@@ -138,9 +138,9 @@
           };
         };
         worker1 = {
-          version = "v1.12.1";
-          sha256 = "sha256-5IgKMWkDa4/VkEvD/x7Tr+YebilFJQCk/UoPL7WW1BE=";
-          schematicSha256 = "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ=";
+          version = "v1.13.3";
+          sha256 = "sha256-otXfOROL6Z4JdT4FGuMUGB0i0jFBXudHneBeOFCl9U8=";
+          schematicSha256 = "sha256-0svhW3ksmvLqB8iNrFoIMw7QmkBGKqk3mlsXchZ+8aw=";
           controlPlane = false;
           nvidia = true;
           network-interfaces = {

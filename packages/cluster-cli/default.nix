@@ -22,6 +22,7 @@ let
         nvidia = mCfg.nvidia or (m.nvidia or false);
         osDisk = mCfg.osDisk or (m.osDisk or null);
         diskSelector = mCfg.diskSelector or (m.diskSelector or null);
+        tpm = mCfg.tpm or (m.tpm or null);
         networkInterfaces = netIfaces;
       }) raw
   );
@@ -65,13 +66,6 @@ pkgs.stdenv.mkDerivation {
       --set CLUSTER_CONTROL_VIP "${controlVip}" \
       --set CLUSTER_ENDPOINT "${endpoint}" \
       --prefix PATH : ${pkgs.lib.makeBinPath runtimeBinaries}
-
-    # 2. Install legacy alias symlinks
-    makeWrapper $out/bin/cluster $out/bin/cluster-status --add-flags "status"
-    makeWrapper $out/bin/cluster $out/bin/cluster-wakeup --add-flags "wakeup"
-    makeWrapper $out/bin/cluster $out/bin/cluster-shutdown --add-flags "shutdown"
-    makeWrapper $out/bin/cluster $out/bin/cluster-pull-secrets --add-flags "pull-secrets"
-    makeWrapper $out/bin/cluster $out/bin/cluster-discover --add-flags "discover"
   '';
 
   meta = {

@@ -46,11 +46,15 @@
           postInstall = ''
             wrapProgram $out/bin/inspector \
               --prefix PATH : ${
-                pkgs.lib.makeBinPath [
-                  pkgs.util-linux
-                  pkgs.gptfdisk
-                  pkgs.coreutils
-                ]
+                pkgs.lib.makeBinPath (
+                  [ pkgs.coreutils ]
+                  ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+                    pkgs.util-linux
+                    pkgs.gptfdisk
+                    pkgs.pciutils
+                    pkgs.tpm2-tools
+                  ]
+                )
               }
           '';
 

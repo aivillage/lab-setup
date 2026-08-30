@@ -19,7 +19,7 @@ in
 
     authorizedKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = if cluster != null && cluster ? authorizedKeys then cluster.authorizedKeys else [ ];
+      default = if cluster != null then (cluster.lab.authorizedKeys or [ ]) else [ ];
       description = "List of SSH authorized public keys.";
     };
   };

@@ -60,10 +60,50 @@ let
         default = false;
         description = "Whether this machine has NVIDIA GPUs";
       };
-      osDisk = mkOption {
-        type = types.nullOr types.str;
+      tpm = mkOption {
+        type = types.nullOr (types.submodule {
+          options = {
+            present = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Whether hardware TPM 2.0 is present on the motherboard";
+            };
+            version = mkOption {
+              type = types.nullOr types.str;
+              default = "2.0";
+              description = "TPM specification version";
+            };
+            device = mkOption {
+              type = types.nullOr types.str;
+              default = "/dev/tpmrm0";
+              description = "TPM character device path";
+            };
+          };
+        });
         default = null;
-        description = "Explicit target disk device for Talos OS installation (e.g. /dev/disk/by-id/nvme-...)";
+        description = "TPM 2.0 hardware specification";
+      };
+      osDisk = mkOption {
+        type = types.nullOr (types.coercedTo types.str (dev: { device = dev; }) (types.submodule {
+          options = {
+            device = mkOption {
+              type = types.str;
+              description = "Explicit target disk device for Talos OS installation (e.g. /dev/disk/by-id/nvme-...)";
+            };
+            encrypted = mkOption {
+              type = types.bool;
+              default = false;
+              description = "Whether to enable LUKS2 system disk encryption";
+            };
+            provider = mkOption {
+              type = types.enum [ "tpm" "nodeId" ];
+              default = "tpm";
+              description = "LUKS2 key provider: 'tpm' (TPM 2.0 hardware sealing + nodeID recovery; requires UEFI Secure Boot with signed UKI PCR measurements) or 'nodeId' (cluster PKI derivation only; recommended for netboot/PXE environments without Secure Boot)";
+            };
+          };
+        }));
+        default = null;
+        description = "Target OS disk device and encryption configuration";
       };
       diskSelector = mkOption {
         type = types.nullOr types.anything;
@@ -209,30 +249,33 @@ let
       inherit dhcpHosts generateConfigs;
     };
   mkCluster =
-    args@{
-      name ? "lab1",
-      network,
-      talos,
-      k8s ? { },
+    {
+      lab,
+      cluster,
+      secrets ? { },
       ...
     }:
     let
-      coordinatorHostname = network.coordinator.hostname;
-      coordinatorIp = network.coordinator.ip;
-      controlVip = network.vip.ip;
-      endpoint = network.vip.endpoint;
-      clusterSubnet = network.subnets.private;
-      publicSubnet = network.subnets.public;
-      upstreamDns = network.dns or [ coordinatorIp "1.1.1.1" ];
-      upstreamNtp = network.ntp or [ coordinatorIp "time.cloudflare.com" ];
-      version = talos.version;
-      machines = talos.machines;
+      labName = lab.name;
+      coordinatorHostname = lab.coordinator.hostname or null;
+      coordinatorIp = lab.coordinator.ip;
+      controlVip = cluster.vip.ip;
+      endpoint = cluster.vip.endpoint or "https://${controlVip}:6443";
+      clusterSubnet = lab.subnets.private;
+      publicSubnet = lab.subnets.public;
+      upstreamDns = lab.dns or [ coordinatorIp "1.1.1.1" ];
+      upstreamNtp = lab.ntp or [ coordinatorIp "time.cloudflare.com" ];
+
+      talosCfg = cluster.talos or { };
+      k8sCfg = cluster.k8s or { };
+      version = talosCfg.version or "v1.13.3";
+      machines = talosCfg.machines or { };
       compiledMachines = lib.mapAttrs (
         mName: mCfg:
         machine (
           {
             name = mName;
-            clusterName = name;
+            clusterName = labName;
             clusterEndpoint = endpoint;
             clusterSubnet = clusterSubnet;
             coordinatorIp = coordinatorIp;
@@ -297,13 +340,10 @@ let
       '';
 
       patchArgs = { coordinatorIp = coordinatorIp; } 
-        // (lib.optionalAttrs (talos ? bootstrapCNI) { inherit (talos) bootstrapCNI; })
-        // (lib.optionalAttrs (k8s ? manifestTargets) { k8sManifests = k8s.manifestTargets; })
-        // (lib.optionalAttrs (talos ? k8sModules) { k8sManifests = talos.k8sModules; })
-        // (lib.optionalAttrs (talos ? patches) { talosPatches = talos.patches; })
-        // (lib.optionalAttrs (talos ? modules) { talosPatches = talos.modules; })
-        // (lib.optionalAttrs (talos ? extraPatches) { inherit (talos) extraPatches; })
-        // { overrides = (talos.overrides or {}) // (k8s.overrides or {}); };
+        // (lib.optionalAttrs (talosCfg ? bootstrapCNI) { inherit (talosCfg) bootstrapCNI; })
+        // (lib.optionalAttrs (k8sCfg ? manifestTargets) { k8sManifests = k8sCfg.manifestTargets; })
+        // (lib.optionalAttrs (talosCfg ? patches) { talosPatches = talosCfg.patches; })
+        // { overrides = (talosCfg.overrides or {}) // (k8sCfg.overrides or {}); };
 
       clusterCli = import ../packages/cluster-cli {
         inherit pkgs;
@@ -343,7 +383,10 @@ let
         shift
 
         if [ "$TARGET" = "coordinator" ]; then
-          TARGET="${coordinatorHostname}"
+          ${if coordinatorHostname != null then ''TARGET="${coordinatorHostname}"'' else ''
+          echo -e "\033[1;31mError: No coordinator hostname defined in cluster.nix. Please specify target host explicitly (e.g. nixos-rebuild spark2 switch).\033[0m" >&2
+          exit 1
+          ''};
         fi
 
         ACTION="''${1:-switch}"
@@ -358,7 +401,7 @@ let
 
         if [ "$(hostname 2>/dev/null)" = "$TARGET" ]; then
           echo -e "\033[1;36mRebuilding $TARGET ($ACTION) locally...\033[0m"
-          exec sudo ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$ACTION" -L --flake ".#$TARGET" "$@"
+          exec sudo ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$ACTION" -L --flake "path:.#$TARGET" "$@"
         fi
 
         SSH_USER="admin"
@@ -370,50 +413,14 @@ let
 
         SUDO_FLAG=$([ "$SSH_USER" = "admin" ] && echo "--elevate=sudo" || echo "")
         echo -e "\033[1;36mRebuilding $TARGET ($ACTION) via $SSH_USER@$TARGET...\033[0m"
-        exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$ACTION" -L --flake ".#$TARGET" --target-host "$SSH_USER@$TARGET" --build-host "$SSH_USER@$TARGET" $SUDO_FLAG "$@"
-      '';
-
-      genSecrets = pkgs.writeShellScriptBin "cluster-gen-secrets" ''
-        set -euo pipefail
-        OUT_FILE="''${1:-secrets/talos.yaml}"
-        
-        if [ -f "$OUT_FILE" ]; then
-          echo -e "\033[1;31m[ERROR] $OUT_FILE already exists!\033[0m"
-          echo -e "\033[1;31mAborting to prevent catastrophic PKI loss.\033[0m"
-          echo "If you are absolutely sure you want to destroy your cluster's PKI and generate a new one,"
-          echo "use the --force-destroy-pki flag."
-          if [ "''${2:-}" != "--force-destroy-pki" ] && [ "''${1:-}" != "--force-destroy-pki" ]; then
-            exit 1
-          fi
-          
-          # Automatic timestamped backup
-          TS=$(date +%Y%m%d%H%M%S)
-          BAK_FILE="$OUT_FILE.bak-$TS"
-          echo "Creating timestamped backup of existing secrets at $BAK_FILE..."
-          cp "$OUT_FILE" "$BAK_FILE"
-        fi
-
-        mkdir -p "$(dirname "$OUT_FILE")"
-        RAW_TMP=$(mktemp)
-        
-        # Ensure cleanup
-        trap 'rm -f "$RAW_TMP"' EXIT
-
-        echo "Generating brand new cluster secrets..."
-        ${pkgs.talosctl}/bin/talosctl gen secrets -o "$RAW_TMP"
-        
-        echo "Encrypting secrets via SOPS into $OUT_FILE..."
-        ${pkgs.sops}/bin/sops --encrypt "$RAW_TMP" > "$OUT_FILE"
-        
-        echo -e "\033[1;32m[SUCCESS] Successfully generated and encrypted cluster secrets to $OUT_FILE!\033[0m"
+        exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$ACTION" -L --flake "path:.#$TARGET" --target-host "$SSH_USER@$TARGET" --build-host "$SSH_USER@$TARGET" $SUDO_FLAG "$@"
       '';
 
       devShell = pkgs.mkShell {
-        name = name;
+        name = labName;
         packages = [
           nixosRebuildWrapper
           clusterCli
-          genSecrets
           pkgs.nix
           pkgs.python3
           pkgs.jq
@@ -439,22 +446,13 @@ let
 
           mkdir -p "$CLUSTER_DIR/talos" "$CLUSTER_DIR/k8s"
 
-          echo -e "\033[1;36m${name} shell\033[0m — cluster: \033[33m${name}\033[0m"
-          echo -e "  \033[1mcluster status\033[0m                     → inspect live registered nodes, K8s health & GPU status"
-          echo -e "  \033[1mcluster wakeup <all|node>\033[0m          → wake up node(s) or entire cluster via Wake-on-LAN"
-          echo -e "  \033[1mcluster shutdown <all|node>\033[0m        → shut down node(s) or entire cluster"
-          echo -e "  \033[1mcluster wipe <status|req|cancel>\033[0m   → manage bare-metal node disk wipe lifecycle"
-          echo -e "  \033[1mcluster show <machines|config|..>\033[0m  → inspect declared nodes, configs or reports"
-          echo -e "  \033[1mcluster discover [-w]\033[0m              → fetch auto-generated discovery & write ./machines.nix"
-          echo -e "  \033[1mcluster gen-secrets\033[0m                → safely bootstrap & encrypt brand new cluster PKI"
-          echo -e "  \033[1mcluster gen <talos|k8s>\033[0m            → render Talos OS node configs or K8s manifests"
-          echo -e "  \033[1mcluster apply <talos|k8s>\033[0m          → apply Talos node config or K8s manifests"
-          echo -e "  \033[1mnixos-rebuild <host> [action]\033[0m      → rebuild & deploy any NixOS host in flake (e.g. spark2)"
+          echo -e "\033[1;36m${labName} shell\033[0m — cluster: \033[33m${labName}\033[0m"
+          ${clusterCli}/bin/cluster help
         '';
       };
     in
     {
-      config = args;
+      config = { inherit lab cluster secrets; };
       machines = compiledMachines;
       generateConfigs = generateConfigsScript;
       generatePatches = configLib.mkGeneratePatches patchArgs;

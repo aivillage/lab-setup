@@ -28,9 +28,20 @@ enum Commands {
 #[derive(Serialize)]
 struct InspectorReport {
     system: SystemResources,
+    tpm: TpmInfo,
     block_devices: Vec<BlockDevice>,
     network_devices: Vec<NetworkDevice>,
     pci_devices: Vec<PciDevice>,
+}
+
+#[derive(Serialize)]
+struct TpmInfo {
+    present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
+    description: String,
 }
 
 #[derive(Serialize)]
@@ -95,6 +106,7 @@ fn run_inspect() {
 
     let report = InspectorReport {
         system: system_res,
+        tpm: get_tpm_info(),
         block_devices: get_block_devices(),
         network_devices: get_network_devices(),
         pci_devices: get_pci_devices(),
@@ -312,17 +324,27 @@ fn get_by_id_path(dev_name: &str) -> Option<String> {
                 }
             }
         }
-        // Prioritize nvme- or ata- or scsi- over wwn-
-        candidates.sort_by_key(|c| {
-            if c.contains("/nvme-") {
-                0
-            } else if c.contains("/ata-") {
-                1
-            } else if c.contains("/scsi-") {
-                2
-            } else {
-                3
-            }
+        // Prioritize nvme- or ata- or scsi- over wwn-, and prefer clean model/serial over trailing namespace suffix (e.g. _1)
+        candidates.sort_by(|a, b| {
+            let tier = |c: &str| -> usize {
+                if c.contains("/nvme-") {
+                    0
+                } else if c.contains("/ata-") {
+                    1
+                } else if c.contains("/scsi-") {
+                    2
+                } else {
+                    3
+                }
+            };
+            let is_ns_suffix = |c: &str| -> usize {
+                if c.ends_with("_1") || c.ends_with("_2") || c.ends_with("_3") {
+                    1
+                } else {
+                    0
+                }
+            };
+            (tier(a), is_ns_suffix(a), a.len(), a).cmp(&(tier(b), is_ns_suffix(b), b.len(), b))
         });
         return candidates.into_iter().next();
     }
@@ -416,4 +438,77 @@ fn get_pci_devices() -> Vec<PciDevice> {
         }
     }
     devices
+}
+
+fn get_tpm_info() -> TpmInfo {
+    let tpm_class = Path::new("/sys/class/tpm");
+    let mut present = false;
+    let mut version = None;
+    let mut dev_node = None;
+
+    if let Ok(entries) = fs::read_dir(tpm_class) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let version_file = path.join("tpm_version_major");
+                let ver = if let Ok(v) = fs::read_to_string(&version_file) {
+                    let v_trim = v.trim();
+                    if v_trim == "2" {
+                        "2.0".to_string()
+                    } else if v_trim == "1" {
+                        "1.2".to_string()
+                    } else {
+                        v_trim.to_string()
+                    }
+                } else if Path::new("/dev/tpmrm0").exists() {
+                    "2.0".to_string()
+                } else {
+                    "2.0".to_string()
+                };
+
+                let dev = if Path::new("/dev/tpmrm0").exists() {
+                    "/dev/tpmrm0".to_string()
+                } else {
+                    format!("/dev/{}", name)
+                };
+
+                present = true;
+                version = Some(ver);
+                dev_node = Some(dev);
+                break;
+            }
+        }
+    }
+
+    if !present && (Path::new("/dev/tpmrm0").exists() || Path::new("/dev/tpm0").exists()) {
+        present = true;
+        version = Some("2.0".to_string());
+        dev_node = Some(if Path::new("/dev/tpmrm0").exists() {
+            "/dev/tpmrm0".to_string()
+        } else {
+            "/dev/tpm0".to_string()
+        });
+    }
+
+    if !present {
+        return TpmInfo {
+            present: false,
+            version: None,
+            device: None,
+            description: "Not detected (Disabled in BIOS or unsupported hardware)".to_string(),
+        };
+    }
+
+    let ver_str = version.clone().unwrap_or_else(|| "2.0".to_string());
+    TpmInfo {
+        present: true,
+        version,
+        device: dev_node,
+        description: format!("TPM {} (Hardware Detected)", ver_str),
+    }
 }
