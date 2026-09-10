@@ -50,11 +50,25 @@ let
 
   # ── Device plugin helm chart (cluster-wide) ───────────────────
   devicePluginValues = {
+    runtimeClassName = "nvidia";
     cdi = {
       enabled = true;
     };
     gfd = {
       enabled = true;
+    };
+    config = {
+      map = {
+        default = builtins.toJSON {
+          version = "v1";
+          flags = {
+            migStrategy = "none";
+            failOnInitError = true;
+            deviceDiscoveryStrategy = "nvml";
+          };
+        };
+      };
+      default = "default";
     };
     affinity = {
       nodeAffinity = {
@@ -89,25 +103,31 @@ let
   };
 
   helmPatch = pkgs.runCommand "nvidia-plugin.yaml" { } ''
-        set -euo pipefail
-        
-        (
-          cat << 'PATCH_START'
+    set -euo pipefail
+    
+    (
+      cat << 'PATCH_START'
     cluster:
       inlineManifests:
         - name: nvidia-device-plugin
           contents: |
     PATCH_START
-        
-          sed 's/^/        /' "${renderedNvidiaManifests}"
-          
-        ) > "$out"
+    
+      sed 's/^/        /' "${renderedNvidiaManifests}"
+      
+    ) > "$out"
+  '';
+
+  k8sManifest = pkgs.runCommand "nvidia-device-plugin.yaml" { } ''
+    cat ${runtimeClassManifest} > $out
+    echo -e "\n---\n" >> $out
+    cat ${renderedNvidiaManifests} >> $out
   '';
 
 in
 {
-  # Cluster-wide: the device plugin inline manifest
-  inherit helmPatch runtimeClassPatch;
+  # Cluster-wide: the device plugin inline manifest and standalone k8s manifest
+  inherit helmPatch runtimeClassPatch k8sManifest;
 
   # Per-machine: kernel modules, only applied when machine.nvidia = true
   inherit kernelModulesPatch containerdPatch;

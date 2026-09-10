@@ -31,8 +31,8 @@ let
     { machine, schematic ? null }:
     let
       installerImage = "factory.talos.dev/installer/__SCHEMATIC_ID__:${machine.version}";
-      ifaces = machine.network-interfaces or machine.networkInterfaces or { };
-      explicitPrimary = lib.filterAttrs (_name: iface: iface.primary or false) ifaces;
+      ifaces = machine.network-interfaces or { };
+      explicitPrimary = lib.filterAttrs (_name: iface: (iface.primary or false) || (lib.elem (iface.role or "") [ "private" "cluster" ])) ifaces;
       primaryIfaceName =
         if explicitPrimary != { } then
           lib.head (lib.attrNames explicitPrimary)
@@ -50,23 +50,106 @@ let
       ) (lib.filter (n: n != primaryIfaceName) rawKeys);
       orderedIfaceNames = lib.optional (primaryIfaceName != null) primaryIfaceName ++ sortedOther;
       ifaceList =
-        lib.imap0 (idx: name:
+        if (machine.bonding.enable or false) then
           let
-            ifaceAttrs = ifaces.${name};
-            isPrimary = name == primaryIfaceName;
-          in {
-            interface = name;
-            dhcp = isPrimary;
-            dhcpOptions = {
-              routeMetric = if isPrimary then 1024 else (2048 + (idx * 1024));
-            };
-          }
-        ) orderedIfaceNames;
+            bondedPrivateIfaces = lib.filterAttrs (_name: iface: ((iface.role or "") == "private") || (iface.primary or false)) ifaces;
+            bondedPrivateIfaceNames = lib.attrNames bondedPrivateIfaces;
+            otherIfaceNames = lib.filter (n: !lib.elem n bondedPrivateIfaceNames) (lib.attrNames ifaces);
+            bond0Obj = {
+              interface = "bond0";
+              dhcp = true;
+              dhcpOptions = {
+                routeMetric = 1024;
+              };
+              bond = {
+                mode = machine.bonding.mode or "802.3ad";
+                interfaces = bondedPrivateIfaceNames;
+                miimon = machine.bonding.miimon or 100;
+                updelay = machine.bonding.updelay or 200;
+                downdelay = machine.bonding.downdelay or 200;
+              };
+            } // (
+              if (machine.controlPlane or false) && (machine.clusterVip or "") != "" then {
+                vip = {
+                  ip = machine.clusterVip;
+                };
+              } else { }
+            );
+            otherList = map (name:
+              let
+                ifaceAttrs = ifaces.${name};
+              in
+              if (ifaceAttrs.role or "") == "disabled" || (ifaceAttrs.ignore or false) then {
+                interface = name;
+                ignore = true;
+              } else if (ifaceAttrs.ip or "") != "" then {
+                interface = name;
+                dhcp = false;
+                addresses = [ "${ifaceAttrs.ip}/24" ];
+              } else {
+                interface = name;
+                dhcp = true;
+                dhcpOptions = {
+                  routeMetric = 2048;
+                };
+              }
+            ) otherIfaceNames;
+          in
+          [ bond0Obj ] ++ otherList
+        else
+          lib.imap0 (idx: name:
+            let
+              ifaceAttrs = ifaces.${name};
+              isPrimary = name == primaryIfaceName;
+            in
+            if (ifaceAttrs.role or "") == "disabled" || (ifaceAttrs.ignore or false) then {
+              interface = name;
+              ignore = true;
+            } else if (ifaceAttrs.ip or "") != "" then
+              {
+                interface = name;
+                dhcp = false;
+                addresses = [ "${ifaceAttrs.ip}/24" ];
+              }
+              // (
+                if isPrimary then {
+                  routes = [
+                    {
+                      network = "0.0.0.0/0";
+                      gateway =
+                        if (machine.gateway or "") != "" then
+                          machine.gateway
+                        else
+                          throw "[AI VILLAGE] Machine '${machine.name}' has static IP '${ifaceAttrs.ip}' but 'lab.gateway' is not defined in lab.nix.";
+                      metric = 1024;
+                    }
+                  ];
+                } else { }
+              )
+            else
+              {
+                interface = name;
+                dhcp = true;
+                dhcpOptions = {
+                  routeMetric = if isPrimary then 1024 else 2048;
+                };
+              }
+              // (
+                if isPrimary && (machine.controlPlane or false) && (machine.clusterVip or "") != "" then {
+                  vip = {
+                    ip = machine.clusterVip;
+                  };
+                } else { }
+              )
+          ) orderedIfaceNames;
 
       tpmPresent = machine.tpm.present or false;
-      osDiskConfig = machine.osDisk or null;
-      osDiskEncrypted = if osDiskConfig != null then (osDiskConfig.encrypted or false) else false;
-      encryptionProvider = if osDiskConfig != null then (osDiskConfig.provider or "tpm") else "tpm";
+      osDiskConfig = machine.disks.os or { };
+      modelsDisk = machine.disks.models or null;
+      modelsDiskDev = if modelsDisk != null then modelsDisk.device or null else null;
+      modelsDiskMount = if modelsDisk != null then modelsDisk.mount or "/var/models" else "/var/models";
+      osDiskEncrypted = osDiskConfig.encrypted or false;
+      encryptionProvider = osDiskConfig.provider or "tpm";
 
       encryptionConfig =
         if osDiskEncrypted then
@@ -122,19 +205,78 @@ let
             nodeIP = {
               validSubnets = [ machine.clusterSubnet ];
             };
-          };
+          } // (lib.optionalAttrs ((machine.nvidia or false) && !(machine.controlPlane or false)) {
+            extraArgs = {
+              register-with-taints = "nvidia.com/gpu=present:NoSchedule";
+            };
+          });
           install = {
             image = installerImage;
             wipe = true;
           } // (
             if (osDiskConfig.device or null) != null then { disk = osDiskConfig.device; }
             else if (machine.diskSelector or null) != null then { diskSelector = machine.diskSelector; }
-            else { diskSelector = { size = "< 1TB"; }; }
+            else throw "Machine ${machine.name} must declare either disks.os.device or diskSelector."
           );
-        } // (if encryptionConfig != { } then { systemDiskEncryption = encryptionConfig; } else { });
+        }
+        // (if encryptionConfig != { } then { systemDiskEncryption = encryptionConfig; } else { })
+        // (lib.optionalAttrs (modelsDiskDev != null && modelsDiskDev != "") {
+          disks = [
+            {
+              device = modelsDiskDev;
+              partitions = [
+                { mountpoint = modelsDiskMount; }
+              ];
+            }
+          ];
+        })
+        // (lib.optionalAttrs ((machine.coordinatorIp or "") != "") {
+          registries = {
+            mirrors = (lib.mapAttrs (_name: p: {
+              endpoints = [
+                "http://${machine.coordinatorIp}:${toString p.port}"
+                p.remoteUrl
+              ];
+            }) machine.registryMirrors) // {
+              "factory.talos.dev" = {
+                endpoints = [
+                  "http://${machine.coordinatorIp}:5001"
+                  "https://factory.talos.dev"
+                ];
+              };
+            };
+          };
+        })
+        // (lib.optionalAttrs (machine.nvidia or false) {
+          kernel = {
+            modules = [
+              { name = "nvidia"; }
+              { name = "nvidia_uvm"; }
+              { name = "nvidia_drm"; }
+              { name = "nvidia_modeset"; }
+            ];
+          };
+          sysctls = {
+            "net.core.bpf_jit_harden" = 1;
+          };
+          files = [
+            {
+              content = ''
+                [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia]
+                  runtime_type = "io.containerd.runc.v2"
+              '';
+              permissions = 420;
+              path = "/etc/cri/conf.d/20-customization.part";
+              op = "create";
+            }
+          ];
+        });
       };
     in
-    pkgs.writeText "${machine.name}-machine-patch.yaml" (builtins.toJSON patchObj);
+    let
+      patchFile = pkgs.writeText "${machine.name}-machine-patch.yaml" (builtins.toJSON patchObj);
+    in
+    patchFile // { inherit patchFile; };
   nvidiaPatch =
     if kubelib != null then import ./patches/nvidia.nix { inherit pkgs kubelib; } else null;
   # ── Generate a patches directory ───────────────────────────
@@ -166,8 +308,12 @@ let
         if nvidiaPatch != null then
           [
             {
+              name = "addons/nvidia-device-plugin.yaml";
+              file = resolvePatch "nvidia-device-plugin" nvidiaPatch.k8sManifest;
+            }
+            {
               name = "addons/nvidia-helm.yaml";
-              file = resolvePatch "nvidia-runtime" nvidiaPatch.helmPatch;
+              file = resolvePatch "nvidia-helm" nvidiaPatch.helmPatch;
             }
             {
               name = "addons/nvidia-runtime.yaml";
@@ -283,110 +429,30 @@ let
     }:
     let
       machinePatch = mkMachinePatch { inherit machine schematic; };
-      outputType = if machine.controlPlane then "controlplane" else "worker";
+      outputType = if machine.controlPlane then "controlplane,talosconfig" else "worker";
     in
-    pkgs.writeShellScriptBin "generate-config" ''
-      set -euo pipefail
-
-      PATCHES_DIR="''${1:?Usage: generate-config <patches-dir> [secrets-file]}"
-      SECRETS_FILE="''${2:-}"
-
-      if [ ! -d "$PATCHES_DIR" ]; then
-        echo "Error: patches dir $PATCHES_DIR not found. Run generate-patches first."
-        exit 1
-      fi
-
-      # Expand to absolute path and change into target output directory
-      if [ -n "$SECRETS_FILE" ]; then
-        SECRETS_DIR="$(cd "$(dirname "$SECRETS_FILE")" 2>/dev/null && pwd || echo "")"
-        if [ -n "$SECRETS_DIR" ]; then
-          SECRETS_FILE="$SECRETS_DIR/$(basename "$SECRETS_FILE")"
-        fi
-      fi
-      PATCHES_DIR="$(cd "$PATCHES_DIR" && pwd)"
-      cd "$PATCHES_DIR"
-
-      SECRETS_FLAG=""
-      if [ -n "$SECRETS_FILE" ] && [ -f "$SECRETS_FILE" ]; then
-        SECRETS_FLAG="--with-secrets $SECRETS_FILE"
-      fi
-
-      # Collect all base patches from base-patches directory without fragile filename filtering
-      PATCH_FLAGS=""
-      if [ -d "$PATCHES_DIR/base-patches" ]; then
-        for f in "$PATCHES_DIR/base-patches"/*.yaml; do
-          [ -f "$f" ] || continue
-          PATCH_FLAGS="$PATCH_FLAGS --config-patch @$f"
-        done
-      fi
-
-
-
-      ${lib.optionalString (machine.nvidia) ''
-        # Nvidia kernel modules — per-machine, only for GPU nodes
-        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.kernelModulesPatch}"
-        PATCH_FLAGS="$PATCH_FLAGS --config-patch @${nvidiaPatch.containerdPatch}"
-      ''}
-
-      echo "Generating config for ${machine.name} (${outputType})..."
-
-      SCHEMATIC_ID=$(cat ${schematic})
-      MACHINE_PATCH=$(mktemp --suffix=-${machine.name}-patch.json)
-      ${pkgs.gnused}/bin/sed "s|__SCHEMATIC_ID__|$SCHEMATIC_ID|g" ${machinePatch} > "$MACHINE_PATCH"
-
-      ${pkgs.talosctl}/bin/talosctl gen config \
-        "${clusterName}" \
-        "${clusterEndpoint}" \
-        --talos-version "${talosVersion}" \
-        --output-types "${if machine.controlPlane then "controlplane,talosconfig" else "worker"}" \
-        $PATCH_FLAGS \
-        --config-patch @"$MACHINE_PATCH" \
-        ${lib.concatMapStringsSep " \\\n    " (p: "--config-patch @${p}") machine.extraPatches} \
-        $SECRETS_FLAG \
-        --with-docs=false \
-        --with-examples=false \
-        --force
-
-      if [ -f "controlplane.yaml" ]; then
-        mv controlplane.yaml "${machine.name}.yaml"
-      fi
-      if [ -f "worker.yaml" ]; then
-        mv worker.yaml "${machine.name}.yaml"
-      fi
-
-      # Strip conflicting HostnameConfig document and base disk line if diskSelector is present
-      ${pkgs.python3}/bin/python3 -c '
-import sys, re
-content = open("${machine.name}.yaml").read()
-docs = re.split(r"\n---\n?", content)
-filtered = [d for d in docs if "HostnameConfig" not in d]
-text = "\n---\n".join(filtered).strip() + "\n"
-if "diskSelector:" in text:
-    lines = [l for l in text.splitlines() if not re.match(r"^\s*disk:\s*", l)]
-    text = "\n".join(lines) + "\n"
-open("${machine.name}.yaml", "w").write(text)
-'
-      # Validate generated MachineConfig against Talos schema
-      if ! ${pkgs.talosctl}/bin/talosctl validate --config "${machine.name}.yaml" --mode container >/dev/null 2>&1; then
-        VAL_ERR=$(${pkgs.talosctl}/bin/talosctl validate --config "${machine.name}.yaml" --mode container 2>&1 || true)
-        CLEAN_ERR=$(echo "$VAL_ERR" | grep -v "issuing CA key" | grep -v "1 error occurred:" || true)
-        if [ -n "$CLEAN_ERR" ]; then
-          echo "$CLEAN_ERR"
-          exit 1
-        fi
-      fi
-
-      echo "  → ${machine.name}.yaml (validated)"
-
-      ${lib.optionalString (machine.controlPlane) ''
-        ENDPOINT_IP="$(echo "${clusterEndpoint}" | sed -E 's|https://(.*):6443|\1|')"
-        ${pkgs.talosctl}/bin/talosctl --talosconfig talosconfig config endpoint "$ENDPOINT_IP"
-        chmod 644 talosconfig
-        echo "  → talosconfig"
-      ''}
-    '';
+    pkgs.writeShellApplication {
+      name = "generate-config";
+      runtimeInputs = [
+        pkgs.talosctl
+        pkgs.coreutils
+        pkgs.gnused
+        pkgs.python3
+      ];
+      runtimeEnv = {
+        TALOS_VERSION = if lib.hasPrefix "v" talosVersion then talosVersion else "v${talosVersion}";
+        OUTPUT_TYPE = outputType;
+        MACHINE_PATCH_FILE = "${machinePatch.patchFile or machinePatch}";
+        MACHINE_NAME = machine.name;
+        CLUSTER_NAME = clusterName;
+        CLUSTER_ENDPOINT = clusterEndpoint;
+        SCHEMATIC_FILE = "${schematic}";
+        EXTRA_PATCHES = lib.concatStringsSep " " machine.extraPatches;
+      };
+      text = builtins.readFile ./scripts/generate-config.sh;
+    };
 
 in
 {
-  inherit mkGeneratePatches mkMachineConfig;
+  inherit mkGeneratePatches mkMachineConfig mkMachinePatch;
 }

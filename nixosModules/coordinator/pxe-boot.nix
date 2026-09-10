@@ -8,7 +8,7 @@
 }:
 let
   lib = pkgs.lib;
-  resolvedGeneratePatches = if generatePatches != null then generatePatches else (import ../talos { inherit pkgs lib inputs; }).mkGeneratePatches {
+  resolvedGeneratePatches = if generatePatches != null then generatePatches else (import ../../talos { inherit pkgs lib inputs; }).mkGeneratePatches {
     coordinatorIp = ip;
     webserverHost = "http://${ip}:8080/configs";
   };

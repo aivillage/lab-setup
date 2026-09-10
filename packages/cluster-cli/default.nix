@@ -11,24 +11,23 @@ let
     let
       raw = if pkgs.lib.isAttrs machines then (machines.machines or machines) else { };
     in
-    pkgs.lib.mapAttrs (name: m:
-      let
-        mCfg = m.machine or m;
-        netIfaces = mCfg.network-interfaces or mCfg.networkInterfaces or { };
-      in {
-        name = mCfg.name or m.name or name;
-        ip = m.primaryIp or mCfg.ip or (m.ip or null);
-        controlPlane = mCfg.controlPlane or (m.controlPlane or false);
-        nvidia = mCfg.nvidia or (m.nvidia or false);
-        osDisk = mCfg.osDisk or (m.osDisk or null);
-        diskSelector = mCfg.diskSelector or (m.diskSelector or null);
-        tpm = mCfg.tpm or (m.tpm or null);
-        networkInterfaces = netIfaces;
-      }) raw
-  );
+      pkgs.lib.mapAttrs (name: m:
+        let
+          mCfg = m.machine or m;
+          netIfaces = mCfg.network-interfaces or { };
+        in {
+          name = mCfg.name or name;
+          ip = m.primaryIp or mCfg.ip or null;
+          controlPlane = mCfg.controlPlane or false;
+          nvidia = mCfg.nvidia or false;
+          disks = mCfg.disks or null;
+          diskSelector = mCfg.diskSelector or null;
+          tpm = mCfg.tpm or null;
+          network-interfaces = netIfaces;
+        }) raw
+    );
 
   runtimeBinaries = [
-    pkgs.python3
     pkgs.talosctl
     pkgs.kubectl
     pkgs.kubernetes-helm
@@ -44,6 +43,14 @@ let
     pkgs.iproute2
     pkgs.nettools
   ];
+
+  pythonEnv = pkgs.python3.withPackages (ps: with ps; [
+    typer
+    rich
+    httpx
+    pydantic
+    pyyaml
+  ]);
 in
 pkgs.stdenv.mkDerivation {
   pname = "cluster-cli";
@@ -54,15 +61,14 @@ pkgs.stdenv.mkDerivation {
   nativeBuildInputs = [ pkgs.makeWrapper ];
 
   installPhase = ''
-    mkdir -p $out/bin
+    mkdir -p $out/libexec $out/bin
+    cp -r src/cluster_cli $out/libexec/
 
-    # 1. Install main Python cluster CLI
-    install -Dm755 cluster.py $out/bin/.cluster-wrapped
-
-    makeWrapper ${pkgs.python3}/bin/python3 $out/bin/cluster \
-      --add-flags "$out/bin/.cluster-wrapped" \
+    makeWrapper ${pythonEnv}/bin/python3 $out/bin/cluster \
+      --set PYTHONPATH "$out/libexec" \
+      --add-flags "-m cluster_cli.cli" \
       --set CLUSTER_MACHINES_JSON '${machinesJson}' \
-      --set CLUSTER_COORDINATOR_HOST "${coordinator}" \
+      --set CLUSTER_COORDINATOR_HOST "${if coordinator != null then coordinator else "127.0.0.1"}" \
       --set CLUSTER_CONTROL_VIP "${controlVip}" \
       --set CLUSTER_ENDPOINT "${endpoint}" \
       --prefix PATH : ${pkgs.lib.makeBinPath runtimeBinaries}

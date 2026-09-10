@@ -55,6 +55,45 @@ let
         type = types.attrsOf interfaceType;
         description = "Network interfaces keyed by device name (e.g. enp1s0)";
       };
+      bonding = mkOption {
+        type = types.submodule {
+          options = {
+            enable = mkOption {
+              type = types.bool;
+              default = false;
+              description = "Whether to aggregate private network interfaces into a bond0 device";
+            };
+            mode = mkOption {
+              type = types.enum [ "active-backup" "802.3ad" "balance-tlb" "balance-alb" ];
+              default = "802.3ad";
+              description = "Linux bonding mode";
+            };
+            miimon = mkOption {
+              type = types.nullOr types.int;
+              default = 100;
+              description = "MII link monitoring frequency in milliseconds";
+            };
+            updelay = mkOption {
+              type = types.nullOr types.int;
+              default = 200;
+              description = "Delay before link is considered up in milliseconds";
+            };
+            downdelay = mkOption {
+              type = types.nullOr types.int;
+              default = 200;
+              description = "Delay before link is considered down in milliseconds";
+            };
+          };
+        };
+        default = {
+          enable = false;
+          mode = "802.3ad";
+          miimon = 100;
+          updelay = 200;
+          downdelay = 200;
+        };
+        description = "Link aggregation bonding configuration";
+      };
       nvidia = mkOption {
         type = types.bool;
         default = false;
@@ -83,27 +122,52 @@ let
         default = null;
         description = "TPM 2.0 hardware specification";
       };
-      osDisk = mkOption {
-        type = types.nullOr (types.coercedTo types.str (dev: { device = dev; }) (types.submodule {
+      disks = mkOption {
+        type = types.nullOr (types.submodule {
           options = {
-            device = mkOption {
-              type = types.str;
-              description = "Explicit target disk device for Talos OS installation (e.g. /dev/disk/by-id/nvme-...)";
+            os = mkOption {
+              type = types.nullOr (types.coercedTo types.str (dev: { device = dev; }) (types.submodule {
+                options = {
+                  device = mkOption {
+                    type = types.str;
+                    description = "Target OS disk device";
+                  };
+                  encrypted = mkOption {
+                    type = types.bool;
+                    default = false;
+                    description = "Enable LUKS2 system disk encryption";
+                  };
+                  provider = mkOption {
+                    type = types.enum [ "tpm" "nodeId" ];
+                    default = "tpm";
+                    description = "LUKS2 key provider";
+                  };
+                };
+              }));
+              default = null;
+              description = "Primary OS installation disk";
             };
-            encrypted = mkOption {
-              type = types.bool;
-              default = false;
-              description = "Whether to enable LUKS2 system disk encryption";
-            };
-            provider = mkOption {
-              type = types.enum [ "tpm" "nodeId" ];
-              default = "tpm";
-              description = "LUKS2 key provider: 'tpm' (TPM 2.0 hardware sealing + nodeID recovery; requires UEFI Secure Boot with signed UKI PCR measurements) or 'nodeId' (cluster PKI derivation only; recommended for netboot/PXE environments without Secure Boot)";
+            models = mkOption {
+              type = types.nullOr (types.coercedTo types.str (dev: { device = dev; }) (types.submodule {
+                options = {
+                  device = mkOption {
+                    type = types.str;
+                    description = "Target disk device for local model storage";
+                  };
+                  mount = mkOption {
+                    type = types.str;
+                    default = "/var/models";
+                    description = "Mount point for model storage volume";
+                  };
+                };
+              }));
+              default = null;
+              description = "High-capacity model storage disk mounted on the node";
             };
           };
-        }));
+        });
         default = null;
-        description = "Target OS disk device and encryption configuration";
+        description = "Unified disk layout for OS and model storage";
       };
       diskSelector = mkOption {
         type = types.nullOr types.anything;
@@ -133,10 +197,20 @@ let
         description = "Talos cluster endpoint URL";
         default = "https://127.0.0.1:6443";
       };
+      clusterVip = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Talos control plane virtual IP (VIP)";
+      };
       coordinatorIp = mkOption {
         type = types.str;
         default = "127.0.0.1";
         description = "Coordinator IP address";
+      };
+      gateway = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Default gateway for private infrastructure cluster network";
       };
       clusterSubnet = mkOption {
         type = types.str;
@@ -157,6 +231,16 @@ let
           "time.cloudflare.com"
         ];
         description = "Upstream NTP servers";
+      };
+      registryMirrors = mkOption {
+        type = types.attrsOf (types.submodule {
+          options = {
+            remoteUrl = mkOption { type = types.str; };
+            port = mkOption { type = types.port; };
+          };
+        });
+        default = import ./registries.nix;
+        description = "Container registry mirrors for node containerd configuration";
       };
     };
   };
@@ -202,8 +286,55 @@ let
         talosVersion = cfg.version;
         inherit schematic;
       };
+
+      # Active interfaces on this machine (role is not "disabled" and ignore is false)
+      activeIfaces = lib.filterAttrs (
+        _dev: iface:
+        (iface.role or "private") != "disabled" && !(iface.ignore or false)
+      ) cfg.network-interfaces;
+
+      nonPrivateIfaces = lib.filterAttrs (
+        _dev: iface:
+        (iface.role or "") != "private"
+      ) activeIfaces;
+
+      _assertControlPlaneSingleNic =
+        if cfg.controlPlane then
+          if !cfg.bonding.enable && (builtins.length (lib.attrNames activeIfaces)) > 1 then
+            throw ''
+
+              ╔══════════════════════════════════════════════════════════════════════════════════╗
+              ║ [AI VILLAGE ARCHITECTURE VIOLATION] SINGLE NIC ENFORCEMENT                       ║
+              ╚══════════════════════════════════════════════════════════════════════════════════╝
+              Machine '${cfg.name}' is declared as a controlPlane node (controlPlane = true),
+              but has multiple active network interfaces: ${builtins.concatStringsSep ", " (lib.attrNames activeIfaces)}.
+
+              Control plane nodes must strictly use a SINGLE active network interface on the
+              private infrastructure network (role = "private"). All secondary NICs must be disabled.
+
+              To resolve:
+              In machines.nix, set 'role = "disabled";' on all secondary interfaces for '${cfg.name}'.
+            ''
+          else if nonPrivateIfaces != { } then
+            throw ''
+
+              ╔══════════════════════════════════════════════════════════════════════════════════╗
+              ║ [AI VILLAGE ARCHITECTURE VIOLATION] PRIVATE NETWORK ONLY                         ║
+              ╚══════════════════════════════════════════════════════════════════════════════════╝
+              Machine '${cfg.name}' is declared as a controlPlane node (controlPlane = true),
+              but has non-private interface(s) enabled: ${builtins.concatStringsSep ", " (lib.attrNames nonPrivateIfaces)}.
+
+              Control plane nodes must strictly reside ONLY on the private infrastructure network (role = "private").
+
+              To resolve:
+              In machines.nix, ensure the primary interface has 'role = "private";' and all others have 'role = "disabled";'.
+            ''
+          else
+            true
+        else
+          true;
     in
-    {
+    builtins.seq _assertControlPlaneSingleNic {
       name = cfg.name;
       machine = cfg;
       image = mkImage {
@@ -212,9 +343,10 @@ let
       };
 
       dhcpHosts = lib.concatLists (
-        lib.mapAttrsToList (_dev: iface: [
-          "${iface.mac},${iface.ip},${cfg.name}"
-        ]) cfg.network-interfaces
+        lib.mapAttrsToList (_dev: iface:
+          lib.optional ((iface.ip or "") != "" && (iface.role or "private") != "disabled")
+            "${iface.mac},${iface.ip},${cfg.name}"
+        ) cfg.network-interfaces
       );
 
       primaryIp = 
@@ -263,8 +395,10 @@ let
       endpoint = cluster.vip.endpoint or "https://${controlVip}:6443";
       clusterSubnet = lab.subnets.private;
       publicSubnet = lab.subnets.public;
-      upstreamDns = lab.dns or [ coordinatorIp "1.1.1.1" ];
-      upstreamNtp = lab.ntp or [ coordinatorIp "time.cloudflare.com" ];
+      clusterGateway = lab.gateway or null;
+      upstreamDns = lab.dns or [ clusterGateway "1.1.1.1" ];
+      upstreamNtp = lab.ntp or [ clusterGateway coordinatorIp "time.cloudflare.com" ];
+      registryMirrors = lab.coordinator.registry.providers or (import ./registries.nix);
 
       talosCfg = cluster.talos or { };
       k8sCfg = cluster.k8s or { };
@@ -277,10 +411,13 @@ let
             name = mName;
             clusterName = labName;
             clusterEndpoint = endpoint;
+            clusterVip = controlVip;
             clusterSubnet = clusterSubnet;
             coordinatorIp = coordinatorIp;
+            gateway = clusterGateway;
             upstreamDns = upstreamDns;
             upstreamNtp = upstreamNtp;
+            registryMirrors = registryMirrors;
             version = version;
             sha256 =
               mCfg.sha256
@@ -298,32 +435,7 @@ let
                 else
                   "sha256-IU2M1aPO1aKFMDPV2wct734+ZNgid7g0MUDlHgsN6wQ="
               );
-            extraPatches = (mCfg.extraPatches or [ ]) ++ [
-              (pkgs.writeText "network-patch.json" (builtins.toJSON (
-                let
-                  ifaces = mCfg.network-interfaces or { };
-                  explicitPrivate = lib.filterAttrs (_name: iface: (iface.role or "") == "private" || (iface.primary or false)) ifaces;
-                  primaryName = if explicitPrivate != { } then (lib.head (lib.attrNames explicitPrivate)) else (if ifaces != { } then (lib.head (lib.attrNames ifaces)) else "eth0");
-                  nonPrimaryNames = lib.filter (name: name != primaryName) (lib.attrNames ifaces);
-
-                  primaryConfig = {
-                    interface = primaryName;
-                    dhcp = true;
-                  } // (if (mCfg.controlPlane or false) && controlVip != null then { vip = { ip = controlVip; }; } else { });
-
-                  nonPrimaryConfigs = map (name: {
-                    interface = name;
-                    dhcp = false;
-                  }) nonPrimaryNames;
-                in {
-                  machine = {
-                    network = {
-                      interfaces = [ primaryConfig ] ++ nonPrimaryConfigs;
-                    };
-                  };
-                }
-              )))
-            ];
+            extraPatches = mCfg.extraPatches or [ ];
           }
           // mCfg
         )
@@ -353,74 +465,25 @@ let
         machines = compiledMachines;
       };
 
-      nixosRebuildWrapper = pkgs.writeShellScriptBin "nixos-rebuild" ''
-        set -euo pipefail
-        export TMPDIR="/tmp"
-        export SSH_AUTH_SOCK="''${SSH_AUTH_SOCK:-$HOME/.ssh/ssh_auth_sock}"
-        export NIX_SSHOPTS="''${NIX_SSHOPTS:--A}"
-
-        FIRST_ARG="''${1:-}"
-
-        case "$FIRST_ARG" in
-          switch|boot|test|build|dry-run|build-vm|build-vm-with-bootloader|edit|repl)
-            exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$@"
-            ;;
-          help|--help|-h|"")
-            echo -e "\033[1;36mAI Village NixOS Rebuild Helper\033[0m"
-            echo -e "Usage:"
-            echo -e "  \033[1mnixos-rebuild <node-or-host> [action] [options...]\033[0m"
-            echo -e "  \033[1mnixos-rebuild [action] [options...]\033[0m"
-            echo -e "\nExamples:"
-            echo -e "  nixos-rebuild spark2 switch      # Rebuild and switch spark2 over SSH"
-            echo -e "  nixos-rebuild spark0 boot        # Rebuild and set boot profile on spark0"
-            echo -e "  nixos-rebuild coordinator        # Rebuild and switch coordinator"
-            echo -e "  nixos-rebuild switch --flake .#spark1\n"
-            exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild --help
-            ;;
-        esac
-
-        TARGET="$FIRST_ARG"
-        shift
-
-        if [ "$TARGET" = "coordinator" ]; then
-          ${if coordinatorHostname != null then ''TARGET="${coordinatorHostname}"'' else ''
-          echo -e "\033[1;31mError: No coordinator hostname defined in cluster.nix. Please specify target host explicitly (e.g. nixos-rebuild spark2 switch).\033[0m" >&2
-          exit 1
-          ''};
-        fi
-
-        ACTION="''${1:-switch}"
-        case "$ACTION" in
-          switch|boot|test|build|dry-run|build-vm|build-vm-with-bootloader)
-            shift || true
-            ;;
-          *)
-            ACTION="switch"
-            ;;
-        esac
-
-        if [ "$(hostname 2>/dev/null)" = "$TARGET" ]; then
-          echo -e "\033[1;36mRebuilding $TARGET ($ACTION) locally...\033[0m"
-          exec sudo ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$ACTION" -L --flake "path:.#$TARGET" "$@"
-        fi
-
-        SSH_USER="admin"
-        if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no "admin@$TARGET" "true" 2>/dev/null; then
-          SSH_USER="admin"
-        elif ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no "root@$TARGET" "true" 2>/dev/null; then
-          SSH_USER="root"
-        fi
-
-        SUDO_FLAG=$([ "$SSH_USER" = "admin" ] && echo "--elevate=sudo" || echo "")
-        echo -e "\033[1;36mRebuilding $TARGET ($ACTION) via $SSH_USER@$TARGET...\033[0m"
-        exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild "$ACTION" -L --flake "path:.#$TARGET" --target-host "$SSH_USER@$TARGET" --build-host "$SSH_USER@$TARGET" $SUDO_FLAG "$@"
-      '';
+      nixosRebuildWrapper = pkgs.writeShellApplication {
+        name = "nixos-rebuild";
+        runtimeInputs = [
+          pkgs.nixos-rebuild
+          pkgs.coreutils
+          pkgs.openssh
+        ];
+        runtimeEnv = {
+          COORDINATOR_HOST = if coordinatorHostname != null then coordinatorHostname else "";
+        };
+        text = builtins.readFile ./scripts/nixos-rebuild.sh;
+      };
 
       devShell = pkgs.mkShell {
         name = labName;
         packages = [
           nixosRebuildWrapper
           clusterCli
+          generateConfigsScript
           pkgs.nix
           pkgs.python3
           pkgs.jq
@@ -446,8 +509,10 @@ let
 
           mkdir -p "$CLUSTER_DIR/talos" "$CLUSTER_DIR/k8s"
 
-          echo -e "\033[1;36m${labName} shell\033[0m — cluster: \033[33m${labName}\033[0m"
-          ${clusterCli}/bin/cluster help
+          if [ -t 1 ]; then
+            echo -e "\033[1;36m${labName} shell\033[0m — cluster: \033[33m${labName}\033[0m"
+            ${clusterCli}/bin/cluster --help
+          fi
         '';
       };
     in
