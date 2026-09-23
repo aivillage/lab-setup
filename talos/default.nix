@@ -4,11 +4,12 @@
 # Config generation (patches + per-machine) is in config.nix.
 #
 {
+  inputs ? { },
   pkgs,
-  lib,
-  inputs,
+  lib ? (if inputs ? nixpkgs then inputs.nixpkgs.lib else pkgs.lib),
 }:
 let
+  topInputs = inputs;
   inherit (lib) types mkOption;
 
   interfaceType = types.submodule {
@@ -385,9 +386,11 @@ let
       lab,
       cluster,
       secrets ? { },
+      inputs ? topInputs,
       ...
     }:
     let
+      effectiveInputs = if inputs != { } then inputs else topInputs;
       labName = lab.name;
       coordinatorHostname = lab.coordinator.hostname or null;
       coordinatorIp = lab.coordinator.ip;
@@ -402,6 +405,37 @@ let
 
       talosCfg = cluster.talos or { };
       k8sCfg = cluster.k8s or { };
+      resolvedWorkshops =
+        let
+          rawList = (k8sCfg.workshopHub or { }).workshops or [ ];
+          available = effectiveInputs.workshops.workshops or { };
+        in
+        map (entry:
+          let
+            name = if builtins.isString entry then entry else entry.name;
+            base = available.${name} or {
+              name = name;
+              description = name;
+              user = {
+                image = "ghcr.io/nbhdai/${name}:latest";
+                port = 5000;
+                env = { };
+              };
+            };
+            merged = if builtins.isString entry then base else lib.recursiveUpdate base entry;
+          in
+          {
+            name = merged.name;
+            description = merged.description or merged.name;
+            image = merged.user.image;
+            port = merged.user.port or 5000;
+            launchUri = merged.user.launch_uri or null;
+            env = merged.user.env or { };
+            service = merged.service or null;
+            model = merged.model or null;
+            extraIngressPorts = merged.user.extraIngressPorts or [ ];
+          }
+        ) rawList;
       version = talosCfg.version or "v1.13.3";
       machines = talosCfg.machines or { };
       compiledMachines = lib.mapAttrs (
@@ -455,7 +489,13 @@ let
         // (lib.optionalAttrs (talosCfg ? bootstrapCNI) { inherit (talosCfg) bootstrapCNI; })
         // (lib.optionalAttrs (k8sCfg ? manifestTargets) { k8sManifests = k8sCfg.manifestTargets; })
         // (lib.optionalAttrs (talosCfg ? patches) { talosPatches = talosCfg.patches; })
-        // { overrides = (talosCfg.overrides or {}) // (k8sCfg.overrides or {}); };
+        // { overrides = (talosCfg.overrides or {}) // (k8sCfg.overrides or {}); }
+        // {
+          k8sWorkshopHub = if (k8sCfg ? workshopHub && k8sCfg.workshopHub != null) then (k8sCfg.workshopHub // { inherit resolvedWorkshops; }) else null;
+          k8sVllm = k8sCfg.vllm or null;
+          lab = lab;
+          machines = compiledMachines;
+        };
 
       clusterCli = import ../packages/cluster-cli {
         inherit pkgs;
@@ -478,12 +518,15 @@ let
         text = builtins.readFile ./scripts/nixos-rebuild.sh;
       };
 
+      generatePatches = configLib.mkGeneratePatches patchArgs;
+
       devShell = pkgs.mkShell {
         name = labName;
         packages = [
           nixosRebuildWrapper
           clusterCli
           generateConfigsScript
+          generatePatches
           pkgs.nix
           pkgs.python3
           pkgs.jq
@@ -520,7 +563,7 @@ let
       config = { inherit lab cluster secrets; };
       machines = compiledMachines;
       generateConfigs = generateConfigsScript;
-      generatePatches = configLib.mkGeneratePatches patchArgs;
+      generatePatches = generatePatches;
       devShell = devShell;
     };
 in

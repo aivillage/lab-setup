@@ -13,6 +13,7 @@ let
     kubeProxyReplacement = true;
     k8sServiceHost = "localhost";
     k8sServicePort = 7445;
+    l2announcements = { enabled = true; };
     securityContext.capabilities.ciliumAgent = [
       "CHOWN"
       "KILL"

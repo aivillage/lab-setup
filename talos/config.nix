@@ -205,11 +205,7 @@ let
             nodeIP = {
               validSubnets = [ machine.clusterSubnet ];
             };
-          } // (lib.optionalAttrs ((machine.nvidia or false) && !(machine.controlPlane or false)) {
-            extraArgs = {
-              register-with-taints = "nvidia.com/gpu=present:NoSchedule";
-            };
-          });
+          };
           install = {
             image = installerImage;
             wipe = true;
@@ -278,7 +274,7 @@ let
     in
     patchFile // { inherit patchFile; };
   nvidiaPatch =
-    if kubelib != null then import ./patches/nvidia.nix { inherit pkgs kubelib; } else null;
+    if kubelib != null then import ../k8s/nvidia.nix { inherit pkgs kubelib; } else null;
   # ── Generate a patches directory ───────────────────────────
   mkGeneratePatches =
     {
@@ -291,14 +287,18 @@ let
       k8sManifests ? [ ],
       talosPatches ? [ ],
       overrides ? { },
+      k8sWorkshopHub ? null,
+      k8sVllm ? null,
+      lab ? { },
+      machines ? { },
     }:
     let
       resolvePatch = name: defaultFile:
         if overrides ? ${name} then overrides.${name} else defaultFile;
 
       ciliumPatch =
-        if kubelib != null then import ./patches/cilium.nix { inherit pkgs kubelib; } else null;
-      cniLoaderPatch = import ./patches/cilium-loader.nix {
+        if kubelib != null then import ../k8s/cilium.nix { inherit pkgs kubelib; } else null;
+      cniLoaderPatch = import ./cni-loader.nix {
         inherit pkgs;
         host = webserverHost;
         ciliumPatchName = if bootstrapCNI != null then "cni.yaml" else "cilium.yaml";
@@ -328,10 +328,52 @@ let
           [
             {
               name = "addons/nfs.yaml";
-              file = resolvePatch "nfs-storage" (import ./patches/nfs.nix {
+              file = resolvePatch "nfs-storage" (import ../k8s/nfs.nix {
                 inherit pkgs kubelib;
                 server = nfsServer;
                 path = nfsPath;
+              });
+            }
+          ]
+        else
+          [ ];
+
+      workshopHubPatch =
+        if k8sWorkshopHub != null && (k8sWorkshopHub.enable or true) then
+          [
+            {
+              name = "addons/workshop-hub.yaml";
+              file = resolvePatch "workshop-hub" (import ../k8s/workshop-hub.nix {
+                inherit pkgs lib machines lab;
+                cfg = k8sWorkshopHub;
+              });
+            }
+          ]
+        else
+          [ ];
+
+      vllmPatch =
+        if k8sVllm != null && (k8sVllm.enable or true) then
+          [
+            {
+              name = "addons/vllm.yaml";
+              file = resolvePatch "vllm" (import ../k8s/vllm.nix {
+                inherit pkgs lib;
+                cfg = k8sVllm;
+              });
+            }
+          ]
+        else
+          [ ];
+
+      workshopsPatch =
+        if k8sWorkshopHub != null && (k8sWorkshopHub.enable or true) then
+          [
+            {
+              name = "addons/workshops.yaml";
+              file = resolvePatch "workshops" (import ../k8s/workshops.nix {
+                inherit pkgs lib;
+                workshops = k8sWorkshopHub.resolvedWorkshops or [ ];
               });
             }
           ]
@@ -368,7 +410,7 @@ let
       basePatches = [
         {
           name = "base-patches/schedule.yaml";
-          file = ./patches/schedule.yaml;
+          file = pkgs.writeText "schedule.yaml" "cluster:\n  allowSchedulingOnControlPlanes: true\n";
         }
         {
           name = "base-patches/cni-loader.yaml";
@@ -392,12 +434,15 @@ let
       addonPatches = [
         {
           name = "addons/apiserver-kubelet-rbac.yaml";
-          file = resolvePatch "apiserver-rbac" ./patches/apiserver-kubelet-rbac.yaml;
+          file = resolvePatch "apiserver-rbac" ../k8s/apiserver-kubelet-rbac.yaml;
         }
       ]
       ++ lib.optional (cniManifest != null) cniManifest
       ++ nvidiaPatches
       ++ nfsPatch
+      ++ workshopHubPatch
+      ++ workshopsPatch
+      ++ vllmPatch
       ++ extraPatches
       ++ (lib.filter (x: x != null) customK8sPatches);
 

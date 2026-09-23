@@ -1,11 +1,14 @@
 { inputs }:
+let
+  labSetupInputs = inputs;
+in
 {
-  base = { ... }: {
+  base = { inputs ? null, ... }: {
     imports = [
       ./base.nix
-      inputs.sops-nix.nixosModules.sops
+      labSetupInputs.sops-nix.nixosModules.sops
     ];
-    _module.args.inputs = inputs;
+    _module.args.inputs = labSetupInputs // (if inputs != null then inputs else { });
   };
 
   shell = ./shell.nix;
@@ -14,7 +17,7 @@
   secrets = { ... }: {
     imports = [
       ./secrets.nix
-      inputs.sops-nix.nixosModules.sops
+      labSetupInputs.sops-nix.nixosModules.sops
     ];
   };
 
@@ -22,7 +25,7 @@
     imports = [ ./inspector ];
     nixpkgs.overlays = [
       (final: prev: {
-        inspector = inputs.self.packages.${final.stdenv.hostPlatform.system}.inspector;
+        inspector = labSetupInputs.self.packages.${final.stdenv.hostPlatform.system}.inspector;
       })
     ];
   };
@@ -31,14 +34,14 @@
   spark = ./spark;
   spark-iso = ./spark/iso.nix;
 
-  coordinator = {
+  coordinator = { inputs ? null, ... }: {
     imports = [ ./coordinator ];
-    _module.args.inputs = inputs;
-    _module.args.inspector = (inputs.nixpkgs.lib.nixosSystem {
+    _module.args.inputs = labSetupInputs // (if inputs != null then inputs else { });
+    _module.args.inspector = (labSetupInputs.nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        "${inputs.nixpkgs}/nixos/modules/installer/netboot/netboot-minimal.nix"
-        inputs.self.nixosModules.inspector
+        "${labSetupInputs.nixpkgs}/nixos/modules/installer/netboot/netboot-minimal.nix"
+        labSetupInputs.self.nixosModules.inspector
       ];
     });
   };

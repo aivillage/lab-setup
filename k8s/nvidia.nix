@@ -3,30 +3,6 @@
   kubelib,
 }:
 let
-  # ── Kernel modules patch (per-machine, conditional) ───────────
-  kernelModulesPatch = pkgs.writeText "nvidia-kernel-modules.yaml" ''
-    machine:
-      kernel:
-        modules:
-          - name: nvidia
-          - name: nvidia_uvm
-          - name: nvidia_drm
-          - name: nvidia_modeset
-      sysctls:
-        net.core.bpf_jit_harden: 1
-  '';
-
-  containerdPatch = pkgs.writeText "nvidia-containerd.yaml" ''
-    machine:
-      files:
-        - content: |
-            [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia]
-              runtime_type = "io.containerd.runc.v2"
-          permissions: 0644
-          path: /etc/cri/conf.d/20-customization.part
-          op: create
-  '';
-
   runtimeClassManifest = pkgs.writeText "nvidia-runtime-class.yaml" ''
     apiVersion: node.k8s.io/v1
     kind: RuntimeClass
@@ -127,8 +103,5 @@ let
 in
 {
   # Cluster-wide: the device plugin inline manifest and standalone k8s manifest
-  inherit helmPatch runtimeClassPatch k8sManifest;
-
-  # Per-machine: kernel modules, only applied when machine.nvidia = true
-  inherit kernelModulesPatch containerdPatch;
+  inherit helmPatch runtimeClassPatch k8sManifest runtimeClassManifest;
 }

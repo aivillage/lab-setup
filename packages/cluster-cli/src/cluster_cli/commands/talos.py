@@ -199,11 +199,43 @@ def gen_command(
         dest_dir = Path(out_dir or ".cluster/k8s")
         dest_dir.mkdir(parents=True, exist_ok=True)
         print_info(f"Rendering Kubernetes manifests to {dest_dir}/...")
-        for manifest_name in ["cilium.yaml", "nvidia-device-plugin.yaml"]:
-            code, body = client.get_config(manifest_name)
-            if code == 200:
-                (dest_dir / manifest_name).write_text(body, encoding="utf-8")
-                console.print(f"  -> Saved {dest_dir / manifest_name}")
+
+        manifest_names = [
+            "cilium.yaml",
+            "nvidia-device-plugin.yaml",
+            "workshop-hub.yaml",
+            "workshops.yaml",
+            "vllm.yaml",
+        ]
+
+        gen_bin = shutil.which("generate-patches")
+        local_success = False
+
+        if gen_bin:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                res = subprocess.run([gen_bin, str(tmp_path)], capture_output=True, text=True)
+                if res.returncode == 0:
+                    for manifest_name in manifest_names:
+                        for cand in [
+                            tmp_path / manifest_name,
+                            tmp_path / "addons" / manifest_name,
+                            tmp_path / "base-patches" / manifest_name,
+                        ]:
+                            if cand.is_file():
+                                (dest_dir / manifest_name).write_text(cand.read_text(encoding="utf-8"), encoding="utf-8")
+                                console.print(f"  -> Saved {dest_dir / manifest_name}")
+                                break
+                    local_success = True
+                else:
+                    print_warning(f"generate-patches failed: {res.stderr.strip()}, falling back to Coordinator")
+
+        if not local_success:
+            for manifest_name in manifest_names:
+                code, body = client.get_config(manifest_name)
+                if code == 200:
+                    (dest_dir / manifest_name).write_text(body, encoding="utf-8")
+                    console.print(f"  -> Saved {dest_dir / manifest_name}")
         print_success(f"Kubernetes manifests rendered to {dest_dir}/\n")
 
     else:
@@ -1176,8 +1208,8 @@ def _inspect_model_storage_talos(
                     continue
                 tokens = line_str.split()
                 if len(tokens) >= 2:
-                    size_str = tokens[0]
-                    name_str = tokens[1]
+                    name_str = tokens[-1]
+                    size_str = tokens[-2]
                     try:
                         if name_str in ("models", path_base, norm_path):
                             models_bytes = float(size_str)
@@ -1203,9 +1235,9 @@ def _inspect_model_storage_talos(
                     if not line_str or line_str.startswith("NODE") or line_str.startswith("SIZE") or line_str.startswith("---"):
                         continue
                     tokens = line_str.split()
-                    if tokens:
+                    if len(tokens) >= 2 and tokens[-1] == ".":
                         try:
-                            models_bytes = float(tokens[0])
+                            models_bytes = float(tokens[-2])
                             res_data["used"] = _format_size_gb(models_bytes)
                             break
                         except ValueError:
@@ -1305,16 +1337,11 @@ def _inspect_model_storage_talos(
 
                 cand_name = ""
                 is_dir = True
-                if len(tokens) >= 4 and tokens[1] in ("runtime", "system"):
-                    cand_name = tokens[2]
-                    if len(tokens) > 3 and tokens[3] == "f":
-                        is_dir = False
-                elif len(tokens) >= 2:
-                    cand_name = tokens[0]
-                    if len(tokens) > 1 and tokens[1] == "f":
-                        is_dir = False
+                if len(tokens) >= 2 and tokens[-1] in ("f", "d"):
+                    is_dir = (tokens[-1] == "d")
+                    cand_name = tokens[-2]
                 else:
-                    cand_name = tokens[0]
+                    cand_name = tokens[-1]
 
                 cand_clean = os.path.basename(cand_name.rstrip("/"))
                 if not cand_clean or cand_clean in ignored_names or cand_clean.startswith(".") or cand_clean.endswith(".txt") or not is_dir:
@@ -1540,11 +1567,12 @@ def cache_status_command(
         if node.get("controlPlane", False) or node.get("role") == "ControlPlane":
             continue
         node_name = node["name"]
-        node_ip = node.get("pxe_ip", "-")
         role = node.get("role", "Worker")
 
         k8s_info = k8s_nodes.get(node_name)
         k8s_ready = k8s_info and k8s_info.get("status") == "Ready"
+        k8s_ip = k8s_info.get("ip") if k8s_info else None
+        node_ip = k8s_ip or node.get("pxe_ip", "-")
         is_alive = (node_ip and node_ip != "-" and is_pingable(node_ip, coordinator_host=coordinator_host)) or k8s_ready
 
         if is_alive:

@@ -16,18 +16,18 @@ let
   cfg = config;
 
   # Import patch generators
-  cilium_patch = import ../talos/patches/cilium.nix {
+  cilium_patch = import ../k8s/cilium.nix {
     inherit pkgs;
     kubelib = config.kubelib;
   };
 
-  cilium_loader = import ../talos/patches/cilium-loader.nix {
+  cilium_loader = import ../talos/cni-loader.nix {
     inherit pkgs;
     ciliumPatchName = "cilium.yaml";
     host = "http://${cfg.webserverHost}";
   };
 
-  ghcr_patch = import ../talos/patches/ghcr.nix {
+  ghcr_patch = import ./ghcr.nix {
     inherit pkgs;
   };
 

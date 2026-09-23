@@ -30,7 +30,7 @@ let
         { machines = rawMachines; generatePatches = cfg.generatePatches; }
       else
         (import ../../talos { inherit pkgs lib inputs; }).mkCluster {
-          inherit lab;
+          inherit lab inputs;
           cluster = if cluster != null then cluster else { talos = { machines = rawMachines; }; };
         }
     else

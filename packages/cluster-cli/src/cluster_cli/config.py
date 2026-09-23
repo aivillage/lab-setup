@@ -45,19 +45,17 @@ def get_subnet_broadcast(vip_ip: str) -> str:
     return "255.255.255.255"
 
 
-def is_local_host(coordinator_host: str) -> bool:
-    """Checks whether the coordinator host represents the local machine."""
-    if coordinator_host in ("127.0.0.1", "localhost", "::1"):
+def is_local_host(host: str) -> bool:
+    """Checks whether the specified host represents the local machine."""
+    if not host or host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
         return True
     try:
         local_hostname = socket.gethostname()
-        if (
-            coordinator_host == local_hostname
-            or coordinator_host.split(".")[0] == local_hostname.split(".")[0]
-        ):
+        if host == local_hostname or host.split(".")[0] == local_hostname.split(".")[0]:
             return True
-        if Path("/var/lib/coordinator").is_dir() or Path("/var/lib/tftpboot").is_dir():
-            return True
+        for info in socket.getaddrinfo(local_hostname, None):
+            if host == info[4][0]:
+                return True
     except Exception:
         pass
     return False
