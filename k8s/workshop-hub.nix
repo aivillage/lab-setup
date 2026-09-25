@@ -198,6 +198,10 @@ let
     metadata:
       name: workshop-l2-policy
     spec:
+      nodeSelector:
+        matchExpressions:
+          - key: node-role.kubernetes.io/control-plane
+            operator: DoesNotExist
       externalIPs: true
       loadBalancerIPs: true
       interfaces:

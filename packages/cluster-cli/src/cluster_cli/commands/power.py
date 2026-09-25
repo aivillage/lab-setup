@@ -266,14 +266,14 @@ def shutdown_command(
 
     total_targets_count = len(target_workers) + len(target_control)
     if is_all or total_targets_count > 1:
-        print_info("Attempting fast workload teardown in 'workshop' namespace...")
+        print_info("Attempting fast pod teardown in 'workshop' namespace...")
         try:
             res_delete = run_kubectl(
-                ["delete", "deployments,pods", "--all", "-n", "workshop", "--grace-period=0", "--force", "--timeout=5s"],
+                ["delete", "pods", "--all", "-n", "workshop", "--grace-period=0", "--force", "--timeout=5s"],
                 coordinator_host=coordinator_host,
             )
             if res_delete.returncode == 0:
-                print_success("Workshop workloads terminated cleanly.")
+                print_success("Workshop pods terminated cleanly.")
             else:
                 err_msg = res_delete.stderr.strip()
                 if "NotFound" in err_msg or not err_msg:
