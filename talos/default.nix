@@ -405,6 +405,43 @@ let
 
       talosCfg = cluster.talos or { };
       k8sCfg = cluster.k8s or { };
+      gitRev =
+        if (effectiveInputs ? workshops && effectiveInputs.workshops ? shortRev) then
+          effectiveInputs.workshops.shortRev
+        else if (effectiveInputs ? workshops && effectiveInputs.workshops ? dirtyShortRev) then
+          effectiveInputs.workshops.dirtyShortRev
+        else
+          null;
+
+      resolveImage = defaultName: img:
+        let
+          rawImage = if img != null && img != "" then img else "ghcr.io/aivillage/workshops/${defaultName}";
+          parts = lib.splitString ":" rawImage;
+          hasTag = builtins.length parts > 1;
+          tag = lib.last parts;
+        in
+        if tag == "latest" then
+          throw "[labsetup] Prohibited tag ':latest' found on image '${rawImage}'. Images must be pinned to an immutable tag or omit the tag to track the workshops flake shortRev."
+        else if hasTag then
+          rawImage
+        else if gitRev != null then
+          "${rawImage}:${gitRev}"
+        else
+          throw ''
+
+            [labsetup] Cannot resolve image tag for workshop '${defaultName}' ('${rawImage}'):
+            The image is untagged and the 'workshops' flake input does not provide a git revision.
+
+            To resolve this:
+            1. Commit and push your changes to the workshops repository so GitHub Actions
+               builds and publishes the container image to GHCR, then update your flake.lock.
+            2. Or pin an existing published image tag directly in <workshop>/workshop.toml:
+                 image = "${rawImage}:<tag>"
+
+            Important: The target image and tag must exist in the container registry (ghcr.io),
+            otherwise Kubernetes nodes will fail at runtime with ImagePullBackOff.
+          '';
+
       resolvedWorkshops =
         let
           rawList = (k8sCfg.workshopHub or { }).workshops or [ ];
@@ -417,21 +454,29 @@ let
               name = name;
               description = name;
               user = {
-                image = "ghcr.io/nbhdai/${name}:latest";
+                image = "ghcr.io/aivillage/workshops/${name}-user";
                 port = 5000;
                 env = { };
               };
             };
             merged = if builtins.isString entry then base else lib.recursiveUpdate base entry;
+            userImage = resolveImage "${name}-user" (merged.user.image or null);
+            service =
+              if (merged.service or null) != null then
+                merged.service // {
+                  image = resolveImage "${name}-service" (merged.service.image or null);
+                }
+              else
+                null;
           in
           {
             name = merged.name;
             description = merged.description or merged.name;
-            image = merged.user.image;
+            image = userImage;
             port = merged.user.port or 5000;
             launchUri = merged.user.launch_uri or null;
             env = merged.user.env or { };
-            service = merged.service or null;
+            service = service;
             model = merged.model or null;
             extraIngressPorts = merged.user.extraIngressPorts or [ ];
           }
@@ -503,6 +548,8 @@ let
         controlVip = controlVip;
         inherit endpoint;
         machines = compiledMachines;
+        generateConfigs = generateConfigsScript;
+        generatePatches = generatePatches;
       };
 
       nixosRebuildWrapper = pkgs.writeShellApplication {
@@ -525,8 +572,6 @@ let
         packages = [
           nixosRebuildWrapper
           clusterCli
-          generateConfigsScript
-          generatePatches
           pkgs.nix
           pkgs.python3
           pkgs.jq

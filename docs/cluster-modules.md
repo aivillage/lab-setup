@@ -1,10 +1,10 @@
-# 🧩 Cluster À La Carte Modules & Local Overrides Guide
+# Cluster A La Carte Modules & Local Overrides Guide
 
-This document describes the **À La Carte Modular Plugin Architecture** for AI Village clusters (`lab1`, `lab2`, etc.).
+This document describes the **A La Carte Modular Plugin Architecture** for AI Village clusters (`lab1`, `lab2`, etc.).
 
 ---
 
-## 📌 Architecture Overview
+## Architecture Overview
 
 Clusters in AI Village separate configuration into two distinct layers:
 1. **Talos OS Machine Modules (`talosModules`)**: Bare-metal operating system patches (kernel modules, Kubelet subnet restrictions, VIPs). Output to `.cluster/talos/base-patches/`.
@@ -14,7 +14,7 @@ This separation guarantees **zero regex string filtering**, **zero filename coll
 
 ---
 
-## 🛠️ Built-in Module Directory
+## Built-in Module Directory
 
 | Module Name | Category | Trigger / Condition | Purpose |
 | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ This separation guarantees **zero regex string filtering**, **zero filename coll
 
 ---
 
-## 💻 Example 1: Standard AI Cluster (`lab1/cluster.nix`)
+## Example 1: Standard AI Cluster (`lab1/cluster.nix`)
 
 In a standard cluster with GPU nodes, NVIDIA modules are automatically activated without extra configuration:
 
@@ -56,7 +56,7 @@ In a standard cluster with GPU nodes, NVIDIA modules are automatically activated
 
 ---
 
-## ⚡ Example 2: Lightweight CPU-Only Workshop (`lab2/cluster.nix`)
+## Example 2: Lightweight CPU-Only Workshop (`lab2/cluster.nix`)
 
 For a CPU-only cluster, omit NVIDIA modules completely:
 
@@ -73,7 +73,7 @@ For a CPU-only cluster, omit NVIDIA modules completely:
 
 ---
 
-## 🧪 Example 3: Overriding Built-in Modules Locally (`overrides`)
+## Example 3: Overriding Built-in Modules Locally (`overrides`)
 
 If you are developing inside `lab1` and need to test a custom or experimental patch without editing `labsetup` source code, use the **`overrides`** attribute in `cluster.nix`:
 
@@ -103,10 +103,10 @@ When `cluster gen talos` or `nixos-rebuild coordinator` runs:
 
 ---
 
-## 🚀 CLI Commands Reference
+## CLI Commands Reference
 
 - **Render Talos OS Node Configs**: `nix develop --command cluster gen talos`
 - **Render Kubernetes Addons**: `nix develop --command cluster gen k8s`
 - **Apply Talos OS Config**: `nix develop --command cluster apply talos worker1`
 - **Apply Kubernetes Addons**: `nix develop --command cluster apply k8s`
-- **Deploy to Coordinator**: `nix develop --command nixos-rebuild coordinator`
+- **Deploy to Coordinator**: `nix develop --command nixos-rebuild coordinator switch`

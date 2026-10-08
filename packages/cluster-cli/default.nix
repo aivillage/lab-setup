@@ -4,6 +4,8 @@
   controlVip ? (args.vip or args.controlVip or ""),
   endpoint ? (if controlVip != "" then "https://${controlVip}:6443" else ""),
   machines ? { },
+  generateConfigs ? null,
+  generatePatches ? null,
 }@args:
 
 let
@@ -42,7 +44,9 @@ let
   ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
     pkgs.iproute2
     pkgs.nettools
-  ];
+  ]
+  ++ pkgs.lib.optional (generateConfigs != null) generateConfigs
+  ++ pkgs.lib.optional (generatePatches != null) generatePatches;
 
   pythonEnv = pkgs.python3.withPackages (ps: with ps; [
     typer
