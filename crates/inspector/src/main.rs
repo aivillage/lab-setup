@@ -28,9 +28,20 @@ enum Commands {
 #[derive(Serialize)]
 struct InspectorReport {
     system: SystemResources,
+    tpm: TpmInfo,
     block_devices: Vec<BlockDevice>,
     network_devices: Vec<NetworkDevice>,
     pci_devices: Vec<PciDevice>,
+}
+
+#[derive(Serialize)]
+struct TpmInfo {
+    present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
+    description: String,
 }
 
 #[derive(Serialize)]
@@ -47,6 +58,7 @@ struct BlockDevice {
     model: Option<String>,
     transport: Option<String>,
     serial: Option<String>,
+    by_id: Option<String>,
     #[serde(skip_serializing)]
     read_only: bool,
 }
@@ -94,6 +106,7 @@ fn run_inspect() {
 
     let report = InspectorReport {
         system: system_res,
+        tpm: get_tpm_info(),
         block_devices: get_block_devices(),
         network_devices: get_network_devices(),
         pci_devices: get_pci_devices(),
@@ -145,14 +158,27 @@ fn run_wipe(confirm: bool) {
             dev.size_bytes
         );
 
-        // 1. Wipe Filesystem Signatures
+        // 1. Hardware Block Discard / TRIM (Resets SSD Flash Translation Layer)
+        let status_blkdiscard = Command::new("blkdiscard")
+            .args(&["-f", &format!("/dev/{}", dev.name)])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+
+        match &status_blkdiscard {
+            Ok(s) if s.success() => println!("  -> blkdiscard: Successfully TRIMmed /dev/{}", dev.name),
+            Ok(s) => println!("  -> blkdiscard: Skipped/Unsupported (exit code: {})", s),
+            Err(e) => println!("  -> blkdiscard: Exec error ({})", e),
+        }
+
+        // 2. Wipe Filesystem Signatures
         let status_wipefs = Command::new("wipefs")
             .args(&["-a", &format!("/dev/{}", dev.name)])
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .status();
 
-        // 2. Zap GPT/MBR tables
+        // 3. Zap GPT/MBR tables
         let status_sgdisk = Command::new("sgdisk")
             .args(&["--zap-all", &format!("/dev/{}", dev.name)])
             .stdout(Stdio::null())
@@ -161,11 +187,11 @@ fn run_wipe(confirm: bool) {
 
         match (status_wipefs, status_sgdisk) {
             (Ok(w), Ok(s)) if w.success() && s.success() => {
-                println!("  -> Successfully wiped /dev/{}", dev.name);
+                println!("  -> Successfully wiped partitions and headers on /dev/{}", dev.name);
             }
             (Ok(w), Ok(s)) => {
                 println!(
-                    "  -> Warning: Issues encountered (wipefs: {}, sgdisk: {})",
+                    "  -> Warning: Partition/header issues (wipefs: {}, sgdisk: {})",
                     w, s
                 );
             }
@@ -255,13 +281,17 @@ fn get_block_devices() -> Vec<BlockDevice> {
                     .blockdevices
                     .into_iter()
                     .filter(|d| d.dev_type == "disk")
-                    .map(|d| BlockDevice {
-                        name: d.name,
-                        size_bytes: d.size,
-                        model: d.model,
-                        transport: d.tran,
-                        serial: d.serial,
-                        read_only: d.ro,
+                    .map(|d| {
+                        let by_id = get_by_id_path(&d.name);
+                        BlockDevice {
+                            name: d.name,
+                            size_bytes: d.size,
+                            model: d.model,
+                            transport: d.tran,
+                            serial: d.serial,
+                            by_id,
+                            read_only: d.ro,
+                        }
                     })
                     .collect()
             } else {
@@ -274,6 +304,51 @@ fn get_block_devices() -> Vec<BlockDevice> {
             vec![]
         }
     }
+}
+
+fn get_by_id_path(dev_name: &str) -> Option<String> {
+    let by_id_dir = Path::new("/dev/disk/by-id");
+    if let Ok(entries) = fs::read_dir(by_id_dir) {
+        let mut candidates = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(target) = fs::canonicalize(&path) {
+                if let Some(filename) = target.file_name() {
+                    if filename == dev_name {
+                        let link_name = path.file_name().unwrap().to_string_lossy().to_string();
+                        // Ignore partition links (e.g. nvme-xxx-part1)
+                        if !link_name.contains("-part") {
+                            candidates.push(path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Prioritize nvme- or ata- or scsi- over wwn-, and prefer clean model/serial over trailing namespace suffix (e.g. _1)
+        candidates.sort_by(|a, b| {
+            let tier = |c: &str| -> usize {
+                if c.contains("/nvme-") {
+                    0
+                } else if c.contains("/ata-") {
+                    1
+                } else if c.contains("/scsi-") {
+                    2
+                } else {
+                    3
+                }
+            };
+            let is_ns_suffix = |c: &str| -> usize {
+                if c.ends_with("_1") || c.ends_with("_2") || c.ends_with("_3") {
+                    1
+                } else {
+                    0
+                }
+            };
+            (tier(a), is_ns_suffix(a), a.len(), a).cmp(&(tier(b), is_ns_suffix(b), b.len(), b))
+        });
+        return candidates.into_iter().next();
+    }
+    None
 }
 
 fn get_network_devices() -> Vec<NetworkDevice> {
@@ -317,15 +392,41 @@ fn get_network_devices() -> Vec<NetworkDevice> {
 }
 
 fn get_pci_devices() -> Vec<PciDevice> {
-    // lspci -mm: "Slot" "Class" "Vendor" "Device"
-    let output = Command::new("lspci").arg("-mm").output();
+    // lspci -Dmm output format:
+    // Slot "Class" "Vendor" "Device" ["SVendor" "SDevice"]
+    // e.g. 0000:00:00.0 "Host bridge" "Intel Corporation" "Raptor Lake-P"
+    let output = Command::new("lspci").arg("-Dmm").output();
 
     let mut devices = Vec::new();
 
     if let Ok(out) = output {
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split("\" \"").collect();
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut parts = Vec::new();
+            let mut in_quote = false;
+            let mut current = String::new();
+
+            for ch in line.chars() {
+                if ch == '"' {
+                    in_quote = !in_quote;
+                } else if (ch == ' ' || ch == '\t') && !in_quote {
+                    if !current.is_empty() {
+                        parts.push(current.clone());
+                        current.clear();
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+            if !current.is_empty() {
+                parts.push(current);
+            }
+
             if parts.len() >= 4 {
                 devices.push(PciDevice {
                     slot: parts[0].trim_matches('"').to_string(),
@@ -337,4 +438,77 @@ fn get_pci_devices() -> Vec<PciDevice> {
         }
     }
     devices
+}
+
+fn get_tpm_info() -> TpmInfo {
+    let tpm_class = Path::new("/sys/class/tpm");
+    let mut present = false;
+    let mut version = None;
+    let mut dev_node = None;
+
+    if let Ok(entries) = fs::read_dir(tpm_class) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let version_file = path.join("tpm_version_major");
+                let ver = if let Ok(v) = fs::read_to_string(&version_file) {
+                    let v_trim = v.trim();
+                    if v_trim == "2" {
+                        "2.0".to_string()
+                    } else if v_trim == "1" {
+                        "1.2".to_string()
+                    } else {
+                        v_trim.to_string()
+                    }
+                } else if Path::new("/dev/tpmrm0").exists() {
+                    "2.0".to_string()
+                } else {
+                    "2.0".to_string()
+                };
+
+                let dev = if Path::new("/dev/tpmrm0").exists() {
+                    "/dev/tpmrm0".to_string()
+                } else {
+                    format!("/dev/{}", name)
+                };
+
+                present = true;
+                version = Some(ver);
+                dev_node = Some(dev);
+                break;
+            }
+        }
+    }
+
+    if !present && (Path::new("/dev/tpmrm0").exists() || Path::new("/dev/tpm0").exists()) {
+        present = true;
+        version = Some("2.0".to_string());
+        dev_node = Some(if Path::new("/dev/tpmrm0").exists() {
+            "/dev/tpmrm0".to_string()
+        } else {
+            "/dev/tpm0".to_string()
+        });
+    }
+
+    if !present {
+        return TpmInfo {
+            present: false,
+            version: None,
+            device: None,
+            description: "Not detected (Disabled in BIOS or unsupported hardware)".to_string(),
+        };
+    }
+
+    let ver_str = version.clone().unwrap_or_else(|| "2.0".to_string());
+    TpmInfo {
+        present: true,
+        version,
+        device: dev_node,
+        description: format!("TPM {} (Hardware Detected)", ver_str),
+    }
 }
